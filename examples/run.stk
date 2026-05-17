@@ -1,0 +1,28 @@
+#!/usr/bin/env stryke
+# examples/run.stk — pull, run, inspect, stop, rm.
+# Run:   s examples/run.stk
+
+use Docker
+
+p "version: " . Docker::version()->{Version}
+
+# Pull (drain stream silently).
+Docker::pull "nginx:alpine"
+
+# Run an HTTP container in the background.
+my $r = Docker::run "nginx:alpine",
+    name   => "stryke-nginx",
+    port   => ["8080:80/tcp"],
+    label  => ["stryke.example=run"],
+    detach => 1
+p "started: $r->{id}"
+
+# Inspect.
+my $info = Docker::inspect "stryke-nginx"
+p "state: " . $info->{State}{Status}
+p "ip   : " . $info->{NetworkSettings}{IPAddress}
+
+# Stop and remove.
+Docker::stop "stryke-nginx", time => 5
+Docker::rm   "stryke-nginx"
+p "cleaned up"

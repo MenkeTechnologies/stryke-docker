@@ -1,0 +1,108 @@
+# t/test_docker.stk — round-trip against a live Docker daemon.
+#
+# Skips when the helper isn't built or no daemon is reachable. Local:
+#   open -a Docker     (macOS Desktop)
+#   sudo systemctl start docker     (Linux)
+#
+# Pulls busybox:latest, runs a one-shot container, asserts output via exec.
+
+require "./lib/Docker.stk"
+
+my $have_helper = eval { Docker::helper_path(); 1 }
+unless ($have_helper) {
+    p "1..0 # SKIP helper not built — run `cargo build --release` first"
+    exit 0
+}
+
+unless (Docker::ping()) {
+    p "1..0 # SKIP no reachable Docker daemon (check $ENV{DOCKER_HOST})"
+    exit 0
+}
+
+my $name = "stryke-test-$$"
+my $vol  = "stryke-test-vol-$$"
+my $net  = "stryke-test-net-$$"
+
+p "1..9"
+my $i = 0
+
+# 1. version
+my $v
+eval { $v = Docker::version() }
+$i++
+p $@ ? "not ok $i - version: $@" :
+       (defined $v->{Version} ? "ok $i - version $v->{Version}" : "not ok $i - version shape")
+
+# 2. pull busybox (silent, drains stream)
+my @pull
+eval { @pull = Docker::pull("busybox:latest") }
+$i++
+p $@ ? "not ok $i - pull: $@" :
+       (@pull > 0 ? "ok $i - pull busybox (#{len(@pull)} events)" : "not ok $i - pull empty")
+
+# 3. run busybox sleep
+my $r
+eval {
+    $r = Docker::run "busybox:latest",
+        name    => $name,
+        cmd     => ["sh", "-c", "sleep 30"],
+        label   => ["stryke.test=1"],
+        detach  => 1
+}
+$i++
+p $@ ? "not ok $i - run: $@" :
+       (defined $r->{id} ? "ok $i - run ($r->{id})" : "not ok $i - run wrong shape")
+
+# 4. ps filtered by our label includes our container
+my @ps
+eval { @ps = Docker::ps(all => 1, filters => { label => ["stryke.test=1"] }) }
+$i++
+p $@ ? "not ok $i - ps: $@" :
+       (grep { $_->{Names} && (grep { $_ =~ /\Q$name\E/ } @{$_->{Names}}) } @ps
+            ? "ok $i - ps filter (#{len(@ps)} match)"
+            : "not ok $i - ps missing $name")
+
+# 5. inspect returns running state
+my $info
+eval { $info = Docker::inspect($name) }
+$i++
+p $@ ? "not ok $i - inspect: $@" :
+       (defined $info->{State}{Running} && $info->{State}{Running}
+            ? "ok $i - inspect running"
+            : "not ok $i - inspect: " . to_json($info->{State}))
+
+# 6. exec echoes stdin → stdout
+my @chunks
+my $exec_r
+eval {
+    $exec_r = Docker::exec $name, ["sh", "-c", "echo hello-stryke && echo err-line 1>&2"],
+        callback => sub ($stream, $data) { push @chunks, [$stream, $data] }
+}
+$i++
+p $@ ? "not ok $i - exec: $@" :
+       ((grep { $_->[0] eq "stdout" && $_->[1] =~ /hello-stryke/ } @chunks)
+            ? "ok $i - exec stdout (exit=$exec_r->{exit_code})"
+            : "not ok $i - exec: " . to_json(\@chunks))
+
+# 7. network create + list + rm
+my $nc
+eval { $nc = Docker::network_create($net, driver => "bridge") }
+$i++
+p $@ ? "not ok $i - network-create: $@" :
+       (defined $nc->{Id} ? "ok $i - network-create" : "not ok $i - net wrong shape")
+
+# 8. volume create + list + rm
+my $vc
+eval { $vc = Docker::volume_create($vol) }
+$i++
+p $@ ? "not ok $i - volume-create: $@" :
+       ($vc->{Name} eq $vol ? "ok $i - volume-create" : "not ok $i - volume wrong name")
+
+# 9. cleanup
+eval {
+    Docker::rm $name, force => 1
+    Docker::network_rm $net
+    Docker::volume_rm $vol
+}
+$i++
+p $@ ? "not ok $i - cleanup: $@" : "ok $i - cleanup"

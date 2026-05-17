@@ -1,0 +1,19 @@
+#!/usr/bin/env stryke
+# examples/logs.stk — buffered + streaming logs.
+# Run:   s examples/logs.stk CONTAINER
+
+use Docker
+
+my $c = $ARGV[0] // die "usage: s examples/logs.stk CONTAINER"
+
+p "── last 20 lines"
+p Docker::logs($c, tail => "20", timestamps => 1)
+
+p ""
+p "── streaming new lines (Ctrl-C to stop, 100-chunk cap)"
+my $n = 0
+Docker::logs_follow $c,
+    callback => sub ($stream, $data) {
+        print $data
+        exit 0 if ++$n >= 100
+    }

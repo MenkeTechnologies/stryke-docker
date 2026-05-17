@@ -1,0 +1,27 @@
+#!/usr/bin/env stryke
+# examples/build.stk — build an image from a context directory.
+# Run:   s examples/build.stk /path/to/build/dir [tag]
+
+use Docker
+
+my $dir = $ARGV[0] // die "usage: s examples/build.stk DIR [TAG]"
+my $tag = $ARGV[1] // "stryke-build:latest"
+
+p "building $dir → $tag"
+
+my $n = Docker::build $dir,
+    tag        => $tag,
+    pull       => 1,
+    rm         => 1,
+    build_args => { COMMIT => qx{git rev-parse --short HEAD 2>/dev/null || echo "dev"} },
+    callback   => sub ($evt) {
+        if (defined $evt->{stream}) {
+            print $evt->{stream}
+        } elsif (defined $evt->{error}) {
+            warn "build error: $evt->{error}\n"
+        } elsif (defined $evt->{aux} && defined $evt->{aux}{ID}) {
+            p "==> built $evt->{aux}{ID}"
+        }
+    }
+
+p "build complete (#{$n} events)"

@@ -1,0 +1,19 @@
+[package]
+name = "docker"
+version = "0.1.0"
+description = "Docker client for stryke. Containers + images + networks + volumes + build + logs + exec + events against the local daemon or any DOCKER_HOST."
+authors = ["MenkeTechnologies"]
+license = "MIT"
+repository = "https://github.com/MenkeTechnologies/stryke-docker"
+edition = "2026"
+
+[bin]
+dock = "bin/dock.stk"
+dock-build = "bin/dock-build.stk"
+
+[scripts]
+build = "cargo build --release"
+build-debug = "cargo build"
+clean = "cargo clean"
+test = "s test t/"
+install = "s pkg install -g ."
