@@ -89,7 +89,7 @@ enum Cmd {
         #[arg(long)]
         name: Option<String>,
         /// argv after the image: `--cmd echo -- hello`.
-        #[arg(long = "cmd", num_args = 0..)]
+        #[arg(long = "cmd", num_args = 0.., allow_hyphen_values = true)]
         cmd: Vec<String>,
         #[arg(long = "env", short = 'e', num_args = 0..)]
         env: Vec<String>,
@@ -123,7 +123,7 @@ enum Cmd {
         image: String,
         #[arg(long)]
         name: Option<String>,
-        #[arg(long = "cmd", num_args = 0..)]
+        #[arg(long = "cmd", num_args = 0.., allow_hyphen_values = true)]
         cmd: Vec<String>,
         #[arg(long = "env", short = 'e', num_args = 0..)]
         env: Vec<String>,
@@ -191,7 +191,7 @@ enum Cmd {
     /// Exec a command. Streams NDJSON `{stream:"stdout"|"stderr", data}`.
     Exec {
         container: String,
-        #[arg(long = "cmd", num_args = 1.., required = true)]
+        #[arg(long = "cmd", num_args = 1.., required = true, allow_hyphen_values = true)]
         cmd: Vec<String>,
         #[arg(long = "env", short = 'e', num_args = 0..)]
         env: Vec<String>,

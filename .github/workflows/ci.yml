@@ -63,7 +63,7 @@ jobs:
           $H pull busybox:latest > /tmp/pull.ndjson
           test -s /tmp/pull.ndjson
 
-          ID=$($H run busybox:latest --name=ci-busy --cmd sh -- -c "sleep 30" \
+          ID=$($H run busybox:latest --name=ci-busy --cmd sh -c "sleep 30" \
                  | jq -er '.id')
           echo "id=$ID"
 
@@ -71,7 +71,7 @@ jobs:
 
           $H inspect ci-busy | jq -e '.State.Running == true'
 
-          $H exec ci-busy --cmd sh -- -c "echo hi" \
+          $H exec ci-busy --cmd sh -c "echo hi" \
             | grep -q '"data":"hi'
 
           $H stats ci-busy | jq -e '.read'
