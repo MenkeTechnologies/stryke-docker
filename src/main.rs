@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::io::{self, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use bollard::container::{
     AttachContainerOptions, Config as ContainerConfig, CreateContainerOptions,
     KillContainerOptions, ListContainersOptions, LogsOptions, RemoveContainerOptions,
@@ -907,10 +907,37 @@ async fn cmd_build(
     let mut out = BufWriter::new(stdout.lock());
     while let Some(item) = stream.next().await {
         let item = item.context("build")?;
-        emit_ndjson(&mut out, &item)?;
+        emit_ndjson(&mut out, &build_info_to_json(&item))?;
         out.flush().ok();
     }
     Ok(())
+}
+
+fn build_info_to_json(b: &bollard::models::BuildInfo) -> JsonValue {
+    let mut m = serde_json::Map::new();
+    if let Some(v) = &b.id { m.insert("id".into(), JsonValue::String(v.clone())); }
+    if let Some(v) = &b.stream { m.insert("stream".into(), JsonValue::String(v.clone())); }
+    if let Some(v) = &b.error { m.insert("error".into(), JsonValue::String(v.clone())); }
+    if let Some(v) = &b.status { m.insert("status".into(), JsonValue::String(v.clone())); }
+    if let Some(v) = &b.progress { m.insert("progress".into(), JsonValue::String(v.clone())); }
+    if let Some(v) = &b.aux {
+        if let Some(id) = &v.id {
+            m.insert("aux".into(), json!({ "ID": id }));
+        }
+    }
+    if let Some(v) = &b.progress_detail {
+        m.insert(
+            "progressDetail".into(),
+            json!({ "current": v.current, "total": v.total }),
+        );
+    }
+    if let Some(v) = &b.error_detail {
+        m.insert(
+            "errorDetail".into(),
+            json!({ "code": v.code, "message": v.message }),
+        );
+    }
+    JsonValue::Object(m)
 }
 
 fn tar_gzip_directory(dir: &Path) -> Result<Vec<u8>> {
