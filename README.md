@@ -1,16 +1,49 @@
-# stryke-docker
+```
+ ███████╗████████╗██████╗ ██╗   ██╗██╗  ██╗███████╗
+ ██╔════╝╚══██╔══╝██╔══██╗╚██╗ ██╔╝██║ ██╔╝██╔════╝
+ ███████╗   ██║   ██████╔╝ ╚████╔╝ █████╔╝ █████╗
+ ╚════██║   ██║   ██╔══██╗  ╚██╔╝  ██╔═██╗ ██╔══╝
+ ███████║   ██║   ██║  ██║   ██║   ██║  ██╗███████╗
+ ╚══════╝   ╚═╝   ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝╚══════╝
+                   [ d o c k e r ]
+```
+
+[![CI](https://github.com/MenkeTechnologies/stryke-docker/actions/workflows/ci.yml/badge.svg)](https://github.com/MenkeTechnologies/stryke-docker/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![stryke](https://img.shields.io/badge/stryke-package-cyan.svg)](https://github.com/MenkeTechnologies/strykelang)
+
+### `[DOCKER CLIENT FOR STRYKE // CONTAINERS + IMAGES + NETWORKS + VOLUMES + BUILD + LOGS + EXEC + EVENTS]`
+
+> *"The docker daemon, scriptable from a one-liner."*
 
 Docker client for stryke. Containers, images, networks, volumes, build,
 logs, exec, events against any reachable Docker daemon (Docker Desktop,
 Linux daemon, Podman with the docker-API socket, remote DOCKER_HOST,
 TLS-wrapped). Opt-in package tier.
 
-Created by MenkeTechnologies.
-
 > The CLI launcher is named `dock` (not `docker`) to avoid shadowing
 > the real `docker` binary on $PATH after `s pkg install -g .`.
 
-## Install
+### [`strykelang`](https://github.com/MenkeTechnologies/strykelang) &middot; [`MenkeTechnologiesMeta`](https://github.com/MenkeTechnologies/MenkeTechnologiesMeta) · [`stryke-k8s`](https://github.com/MenkeTechnologies/stryke-k8s) · [`stryke-kafka`](https://github.com/MenkeTechnologies/stryke-kafka) · [`stryke-demo`](https://github.com/MenkeTechnologies/stryke-demo)
+
+---
+
+## Table of Contents
+
+- [\[0x00\] Install](#0x00-install)
+- [\[0x01\] Quick start](#0x01-quick-start)
+- [\[0x02\] CLI: `dock`](#0x02-cli-dock)
+- [\[0x03\] API reference](#0x03-api-reference)
+- [\[0x04\] Helper protocol](#0x04-helper-protocol)
+- [\[0x05\] Tests](#0x05-tests)
+- [\[0x06\] Dev workflow](#0x06-dev-workflow)
+- [\[0x07\] Layout](#0x07-layout)
+- [\[0x08\] Roadmap](#0x08-roadmap)
+- [\[0xFF\] License](#0xff-license)
+
+---
+
+## [0x00] Install
 
 ```sh
 cd ~/projects/stryke-docker
@@ -24,7 +57,7 @@ Or:
 make install
 ```
 
-## Quick start
+## [0x01] Quick start
 
 ```stryke
 use Docker
@@ -96,7 +129,7 @@ my %remote = (host => "tcp://docker.example.com:2376", timeout => 30)
 Docker::ps %remote
 ```
 
-## CLI: `dock`
+## [0x02] CLI: `dock`
 
 ```sh
 dock ping
@@ -147,7 +180,7 @@ Global flags (also env vars):
 --timeout SECONDS                          API timeout (default 120)
 ```
 
-## API reference
+## [0x03] API reference
 
 ### Daemon
 
@@ -217,7 +250,7 @@ Docker::prune  %opts → \%report
     # opts: containers, images, volumes, networks, all
 ```
 
-## Helper protocol
+## [0x04] Helper protocol
 
 ```sh
 stryke-docker-helper ping
@@ -237,7 +270,7 @@ Output:
 * everything else → single JSON
 * errors → stderr + non-zero exit
 
-## Tests
+## [0x05] Tests
 
 ```sh
 cargo test                                # compiles, no live calls
@@ -261,7 +294,7 @@ sudo systemctl start docker
 DOCKER_HOST=tcp://192.168.1.10:2375 s test t/
 ```
 
-## Dev workflow
+## [0x06] Dev workflow
 
 ```sh
 make             # release build
@@ -271,7 +304,7 @@ make install
 make clean
 ```
 
-## Layout
+## [0x07] Layout
 
 ```
 stryke-docker/
@@ -295,7 +328,7 @@ stryke-docker/
     release.yml                    # cross-compile + GH release on tag push
 ```
 
-## Roadmap
+## [0x08] Roadmap
 
 | v1 (this release) | v2+ |
 |---|---|
@@ -306,6 +339,6 @@ stryke-docker/
 | Synchronous create/start/stop | docker-compose v2 file parser |
 | Single-daemon | Swarm services / configs / secrets |
 
-## License
+## [0xFF] License
 
 MIT.
