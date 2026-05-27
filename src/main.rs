@@ -1692,4 +1692,51 @@ mod tests {
         });
         assert_eq!(build_info_to_json(&b)["progressDetail"]["current"], json!(1));
     }
+
+    #[test]
+    fn parse_kv_value_with_equals() {
+        let (k, v) = parse_kv("opt=a=b").unwrap();
+        assert_eq!(k, "opt");
+        assert_eq!(v, "a=b");
+    }
+
+    #[test]
+    fn label_vec_to_map_skips_malformed() {
+        let m = label_vec_to_map(&["ok=1".into(), "bad".into()]);
+        assert_eq!(m.len(), 1);
+    }
+
+    #[test]
+    fn kv_pairs_duplicate_key_appends() {
+        let input = vec![("k".into(), "1".into()), ("k".into(), "2".into())];
+        assert_eq!(kv_pairs(&input)["k"].len(), 2);
+    }
+
+    #[test]
+    fn build_info_to_json_progress_string_field() {
+        let mut b = bollard::models::BuildInfo::default();
+        b.progress = Some("5/10".into());
+        assert_eq!(build_info_to_json(&b)["progress"], json!("5/10"));
+    }
+
+    #[test]
+    fn parse_port_binding_host_only_duplicates_port() {
+        let (h, c, _) = parse_port_binding("8080").unwrap();
+        assert_eq!(h, "8080");
+        assert_eq!(c, "8080");
+    }
+
+    #[test]
+    fn emit_ndjson_integer_scalar() {
+        let mut buf = Vec::new();
+        emit_ndjson(&mut buf, &JsonValue::from(7i64)).unwrap();
+        assert_eq!(String::from_utf8(buf).unwrap(), "7\n");
+    }
+
+    #[test]
+    fn parse_kv_empty_value() {
+        let (k, v) = parse_kv("flag=").unwrap();
+        assert_eq!(k, "flag");
+        assert_eq!(v, "");
+    }
 }
