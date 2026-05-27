@@ -1124,3 +1124,211 @@ fn _read_marker() {
     let _ = AttachContainerOptions::<String>::default();
     let _: Option<&mut dyn Read> = None;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── parse_kv ────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_kv_simple() {
+        let (k, v) = parse_kv("FOO=bar").unwrap();
+        assert_eq!(k, "FOO");
+        assert_eq!(v, "bar");
+    }
+
+    #[test]
+    fn parse_kv_splits_on_first_equals() {
+        // Values may contain '=' (e.g. KMS=key=value); first '=' splits.
+        let (k, v) = parse_kv("KEY=val=ue=more").unwrap();
+        assert_eq!(k, "KEY");
+        assert_eq!(v, "val=ue=more");
+    }
+
+    #[test]
+    fn parse_kv_empty_value_allowed() {
+        let (k, v) = parse_kv("EMPTY=").unwrap();
+        assert_eq!(k, "EMPTY");
+        assert_eq!(v, "");
+    }
+
+    #[test]
+    fn parse_kv_empty_key_allowed() {
+        // Liberal parser — empty key pinned; downstream may reject.
+        let (k, v) = parse_kv("=value").unwrap();
+        assert_eq!(k, "");
+        assert_eq!(v, "value");
+    }
+
+    #[test]
+    fn parse_kv_missing_equals_errors() {
+        let err = parse_kv("noequals").unwrap_err();
+        assert!(err.contains("expected key=value"));
+        assert!(err.contains("noequals"));
+    }
+
+    // ─── kv_pairs ────────────────────────────────────────────────────
+
+    #[test]
+    fn kv_pairs_groups_duplicate_keys() {
+        let input = vec![
+            ("label".into(), "a".into()),
+            ("label".into(), "b".into()),
+            ("env".into(), "X=1".into()),
+        ];
+        let out = kv_pairs(&input);
+        assert_eq!(out.get("label").unwrap(), &vec!["a", "b"]);
+        assert_eq!(out.get("env").unwrap(), &vec!["X=1"]);
+    }
+
+    #[test]
+    fn kv_pairs_empty_input() {
+        let out = kv_pairs(&[]);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn kv_pairs_preserves_insertion_order_within_key() {
+        let input = vec![
+            ("k".into(), "1".into()),
+            ("k".into(), "2".into()),
+            ("k".into(), "3".into()),
+        ];
+        let out = kv_pairs(&input);
+        assert_eq!(out["k"], vec!["1", "2", "3"]);
+    }
+
+    // ─── parse_port_binding ──────────────────────────────────────────
+
+    #[test]
+    fn parse_port_binding_host_only() {
+        let (h, c, p) = parse_port_binding("8080").unwrap();
+        assert_eq!(h, "8080");
+        // No ':' → container defaults to same value as host.
+        assert_eq!(c, "8080");
+        assert_eq!(p, None);
+    }
+
+    #[test]
+    fn parse_port_binding_host_container() {
+        let (h, c, p) = parse_port_binding("8080:80").unwrap();
+        assert_eq!(h, "8080");
+        assert_eq!(c, "80");
+        assert_eq!(p, None);
+    }
+
+    #[test]
+    fn parse_port_binding_with_protocol() {
+        let (h, c, p) = parse_port_binding("8080:80/tcp").unwrap();
+        assert_eq!(h, "8080");
+        assert_eq!(c, "80");
+        assert_eq!(p.as_deref(), Some("tcp"));
+    }
+
+    #[test]
+    fn parse_port_binding_proto_without_container() {
+        let (h, c, p) = parse_port_binding("53/udp").unwrap();
+        assert_eq!(h, "53");
+        assert_eq!(c, "53");
+        assert_eq!(p.as_deref(), Some("udp"));
+    }
+
+    #[test]
+    fn parse_port_binding_proto_split_runs_before_colon() {
+        // '/' splits first, then ':' applies to the LEFT half only.
+        let (h, c, p) = parse_port_binding("a:b/c:d").unwrap();
+        assert_eq!(h, "a");
+        assert_eq!(c, "b");
+        // Everything after first '/' is the proto, verbatim.
+        assert_eq!(p.as_deref(), Some("c:d"));
+    }
+
+    // ─── label_vec_to_map ────────────────────────────────────────────
+
+    #[test]
+    fn label_vec_to_map_parses_key_value() {
+        let v = vec!["a=1".into(), "b=2".into()];
+        let m = label_vec_to_map(&v);
+        assert_eq!(m.get("a").map(String::as_str), Some("1"));
+        assert_eq!(m.get("b").map(String::as_str), Some("2"));
+    }
+
+    #[test]
+    fn label_vec_to_map_silently_drops_malformed() {
+        // filter_map: entries without '=' are dropped, not errored.
+        let v = vec!["a=1".into(), "no-equals".into(), "b=2".into()];
+        let m = label_vec_to_map(&v);
+        assert_eq!(m.len(), 2);
+        assert!(!m.contains_key("no-equals"));
+    }
+
+    #[test]
+    fn label_vec_to_map_last_wins_on_duplicate_key() {
+        // HashMap insertion order is iterator order; last collected wins.
+        let v = vec!["k=first".into(), "k=second".into()];
+        let m = label_vec_to_map(&v);
+        assert_eq!(m.get("k").map(String::as_str), Some("second"));
+    }
+
+    #[test]
+    fn label_vec_to_map_empty_vec() {
+        let m = label_vec_to_map(&[]);
+        assert!(m.is_empty());
+    }
+
+    // ─── emit_ndjson ─────────────────────────────────────────────────
+
+    #[test]
+    fn emit_ndjson_single_line() {
+        let mut buf = Vec::new();
+        emit_ndjson(&mut buf, &json!({"id": "abc"})).unwrap();
+        assert_eq!(String::from_utf8(buf).unwrap(), "{\"id\":\"abc\"}\n");
+    }
+
+    #[test]
+    fn emit_ndjson_multi_call_count() {
+        let mut buf = Vec::new();
+        for i in 0..5 {
+            emit_ndjson(&mut buf, &json!({"i": i})).unwrap();
+        }
+        let s = String::from_utf8(buf).unwrap();
+        assert_eq!(s.lines().count(), 5);
+    }
+
+    // ─── build_info_to_json ──────────────────────────────────────────
+
+    #[test]
+    fn build_info_to_json_empty_produces_empty_object() {
+        let b = bollard::models::BuildInfo::default();
+        let j = build_info_to_json(&b);
+        assert_eq!(j, JsonValue::Object(serde_json::Map::new()));
+    }
+
+    #[test]
+    fn build_info_to_json_populates_present_fields_only() {
+        let mut b = bollard::models::BuildInfo::default();
+        b.id = Some("img1".into());
+        b.stream = Some("Step 1/3\n".into());
+        let j = build_info_to_json(&b);
+        let obj = j.as_object().unwrap();
+        assert_eq!(obj.get("id").and_then(|v| v.as_str()), Some("img1"));
+        assert_eq!(obj.get("stream").and_then(|v| v.as_str()), Some("Step 1/3\n"));
+        // Unset fields are NOT included (skip-if-None semantics).
+        assert!(!obj.contains_key("error"));
+        assert!(!obj.contains_key("status"));
+    }
+
+    #[test]
+    fn build_info_to_json_includes_progress_detail_when_set() {
+        let mut b = bollard::models::BuildInfo::default();
+        b.progress_detail = Some(bollard::models::ProgressDetail {
+            current: Some(50),
+            total: Some(100),
+        });
+        let j = build_info_to_json(&b);
+        let pd = j.get("progressDetail").unwrap();
+        assert_eq!(pd["current"], json!(50));
+        assert_eq!(pd["total"], json!(100));
+    }
+}
