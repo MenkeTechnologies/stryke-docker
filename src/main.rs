@@ -1628,4 +1628,68 @@ mod tests {
         let (_, _, proto) = parse_port_binding("8080:80/sctp").unwrap();
         assert_eq!(proto, Some("sctp".into()));
     }
+
+    #[test]
+    fn build_info_to_json_empty_when_default() {
+        assert!(build_info_to_json(&bollard::models::BuildInfo::default())
+            .as_object()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn parse_kv_long_value() {
+        let long = "v".repeat(500);
+        let spec = format!("KEY={long}");
+        let (k, v) = parse_kv(&spec).unwrap();
+        assert_eq!(k, "KEY");
+        assert_eq!(v.len(), 500);
+    }
+
+    #[test]
+    fn label_vec_to_map_single_pair() {
+        let m = label_vec_to_map(&["env=prod".into()]);
+        assert_eq!(m["env"], "prod");
+    }
+
+    #[test]
+    fn parse_port_binding_different_host_container_ports() {
+        let (h, c, _) = parse_port_binding("3000:8080").unwrap();
+        assert_eq!(h, "3000");
+        assert_eq!(c, "8080");
+    }
+
+    #[test]
+    fn kv_pairs_three_distinct_keys() {
+        let input = vec![
+            ("a".into(), "1".into()),
+            ("b".into(), "2".into()),
+            ("c".into(), "3".into()),
+        ];
+        assert_eq!(kv_pairs(&input).len(), 3);
+    }
+
+    #[test]
+    fn emit_ndjson_string_value() {
+        let mut buf = Vec::new();
+        emit_ndjson(&mut buf, &JsonValue::String("log".into())).unwrap();
+        assert_eq!(String::from_utf8(buf).unwrap(), "\"log\"\n");
+    }
+
+    #[test]
+    fn parse_kv_key_with_dots() {
+        let (k, v) = parse_kv("com.example=key").unwrap();
+        assert_eq!(k, "com.example");
+        assert_eq!(v, "key");
+    }
+
+    #[test]
+    fn build_info_to_json_progress_detail_partial() {
+        let mut b = bollard::models::BuildInfo::default();
+        b.progress_detail = Some(bollard::models::ProgressDetail {
+            current: Some(1),
+            total: None,
+        });
+        assert_eq!(build_info_to_json(&b)["progressDetail"]["current"], json!(1));
+    }
 }
