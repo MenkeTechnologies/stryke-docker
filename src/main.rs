@@ -1331,4 +1331,301 @@ mod tests {
         assert_eq!(pd["current"], json!(50));
         assert_eq!(pd["total"], json!(100));
     }
+
+    #[test]
+    fn parse_kv_unicode_key_and_value() {
+        let (k, v) = parse_kv("ラベル=値").unwrap();
+        assert_eq!(k, "ラベル");
+        assert_eq!(v, "値");
+    }
+
+    #[test]
+    fn parse_port_binding_host_container_proto_all_three() {
+        let (h, c, p) = parse_port_binding("3000:80/tcp").unwrap();
+        assert_eq!((h.as_str(), c.as_str(), p.as_deref()), ("3000", "80", Some("tcp")));
+    }
+
+    #[test]
+    fn kv_pairs_single_key_single_value() {
+        let out = kv_pairs(&[("env".into(), "PATH=/bin".into())]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out["env"], vec!["PATH=/bin"]);
+    }
+
+    #[test]
+    fn label_vec_to_map_value_with_equals_in_value() {
+        let v = vec!["jwt=eyJ.a.b".into()];
+        let m = label_vec_to_map(&v);
+        assert_eq!(m.get("jwt").map(String::as_str), Some("eyJ.a.b"));
+    }
+
+    #[test]
+    fn build_info_to_json_error_and_status_when_set() {
+        let mut b = bollard::models::BuildInfo::default();
+        b.error = Some("build failed".into());
+        b.status = Some("failed".into());
+        let j = build_info_to_json(&b);
+        assert_eq!(j["error"], json!("build failed"));
+        assert_eq!(j["status"], json!("failed"));
+    }
+
+    #[test]
+    fn emit_ndjson_nested_object_serializes() {
+        let mut buf = Vec::new();
+        emit_ndjson(&mut buf, &json!({"labels": {"app": "web"}})).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.contains("\"app\":\"web\""));
+        assert!(s.ends_with('\n'));
+    }
+
+    #[test]
+    fn parse_kv_only_equals_sign() {
+        let (k, v) = parse_kv("=").unwrap();
+        assert_eq!(k, "");
+        assert_eq!(v, "");
+    }
+
+    #[test]
+    fn parse_port_binding_ipv4_host_with_container_port() {
+        // split_once(':') stops at the first colon — extra colons stay in container.
+        let (h, c, p) = parse_port_binding("0.0.0.0:8080").unwrap();
+        assert_eq!(h, "0.0.0.0");
+        assert_eq!(c, "8080");
+        assert_eq!(p, None);
+    }
+
+    #[test]
+    fn parse_kv_value_with_internal_newline() {
+        let (k, v) = parse_kv("MSG=line1\nline2").unwrap();
+        assert_eq!(k, "MSG");
+        assert_eq!(v, "line1\nline2");
+    }
+
+    #[test]
+    fn label_vec_to_map_empty_key_allowed() {
+        let m = label_vec_to_map(&["=anon".into()]);
+        assert_eq!(m.get("").map(String::as_str), Some("anon"));
+    }
+
+    #[test]
+    fn kv_pairs_many_keys_no_collision() {
+        let input: Vec<(String, String)> = (0..5)
+            .map(|i| (format!("k{i}"), format!("v{i}")))
+            .collect();
+        let out = kv_pairs(&input);
+        assert_eq!(out.len(), 5);
+        assert_eq!(out["k3"], vec!["v3"]);
+    }
+
+    #[test]
+    fn build_info_to_json_stream_and_error_mutually_independent() {
+        let mut b = bollard::models::BuildInfo::default();
+        b.stream = Some("log".into());
+        b.error = Some("fail".into());
+        let j = build_info_to_json(&b);
+        assert_eq!(j["stream"], json!("log"));
+        assert_eq!(j["error"], json!("fail"));
+    }
+
+    #[test]
+    fn emit_ndjson_null_serializes() {
+        let mut buf = Vec::new();
+        emit_ndjson(&mut buf, &JsonValue::Null).unwrap();
+        assert_eq!(String::from_utf8(buf).unwrap(), "null\n");
+    }
+
+    #[test]
+    fn parse_port_binding_udp_protocol() {
+        let (_, _, p) = parse_port_binding("53/udp").unwrap();
+        assert_eq!(p.as_deref(), Some("udp"));
+    }
+
+    #[test]
+    fn parse_kv_long_base64_like_value() {
+        let val = "a".repeat(200);
+        let (k, v) = parse_kv(&format!("DATA={val}")).unwrap();
+        assert_eq!(k, "DATA");
+        assert_eq!(v.len(), 200);
+    }
+
+    #[test]
+    fn build_info_to_json_progress_string_when_set() {
+        let mut b = bollard::models::BuildInfo::default();
+        b.progress = Some("Downloading".into());
+        let j = build_info_to_json(&b);
+        assert_eq!(j["progress"], json!("Downloading"));
+    }
+
+    #[test]
+    fn parse_kv_numeric_key_name() {
+        let (k, v) = parse_kv("123=456").unwrap();
+        assert_eq!(k, "123");
+        assert_eq!(v, "456");
+    }
+
+    #[test]
+    fn label_vec_to_map_value_contains_equals() {
+        let m = label_vec_to_map(&["opts=a=b".into()]);
+        assert_eq!(m.get("opts").map(String::as_str), Some("a=b"));
+    }
+
+    #[test]
+    fn build_info_to_json_id_only() {
+        let mut b = bollard::models::BuildInfo::default();
+        b.id = Some("layer-9".into());
+        let j = build_info_to_json(&b);
+        assert_eq!(j["id"], json!("layer-9"));
+        assert!(!j.as_object().unwrap().contains_key("stream"));
+    }
+
+    #[test]
+    fn emit_ndjson_bool_true() {
+        let mut buf = Vec::new();
+        emit_ndjson(&mut buf, &JsonValue::Bool(true)).unwrap();
+        assert_eq!(String::from_utf8(buf).unwrap(), "true\n");
+    }
+
+    #[test]
+    fn parse_port_binding_tcp_default_proto_none() {
+        let (_, _, p) = parse_port_binding("9000:80").unwrap();
+        assert_eq!(p, None);
+    }
+
+    #[test]
+    fn kv_pairs_two_keys_one_value_each() {
+        let input = vec![("a".into(), "1".into()), ("b".into(), "2".into())];
+        let out = kv_pairs(&input);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out["a"], vec!["1"]);
+    }
+
+    #[test]
+    fn parse_kv_crlf_in_value() {
+        let (k, v) = parse_kv("BODY=a\r\nb").unwrap();
+        assert_eq!(k, "BODY");
+        assert_eq!(v, "a\r\nb");
+    }
+
+    #[test]
+    fn build_info_to_json_error_detail_when_set() {
+        let mut b = bollard::models::BuildInfo::default();
+        b.error_detail = Some(bollard::models::ErrorDetail {
+            code: Some(1),
+            message: Some("denied".into()),
+        });
+        let j = build_info_to_json(&b);
+        assert_eq!(j["errorDetail"]["code"], json!(1));
+        assert_eq!(j["errorDetail"]["message"], json!("denied"));
+    }
+
+    #[test]
+    fn label_vec_to_map_skips_entries_without_equals() {
+        let m = label_vec_to_map(&["a=1".into(), "invalid".into(), "b=2".into()]);
+        assert_eq!(m.len(), 2);
+        assert_eq!(m["a"], "1");
+        assert_eq!(m["b"], "2");
+    }
+
+    #[test]
+    fn build_info_to_json_progress_detail_when_set() {
+        let mut b = bollard::models::BuildInfo::default();
+        b.progress_detail = Some(bollard::models::ProgressDetail {
+            current: Some(3),
+            total: Some(10),
+        });
+        let j = build_info_to_json(&b);
+        assert_eq!(j["progressDetail"]["current"], json!(3));
+        assert_eq!(j["progressDetail"]["total"], json!(10));
+    }
+
+    #[test]
+    fn build_info_to_json_stream_field() {
+        let mut b = bollard::models::BuildInfo::default();
+        b.stream = Some("stdout".into());
+        assert_eq!(build_info_to_json(&b)["stream"], json!("stdout"));
+    }
+
+    #[test]
+    fn build_info_to_json_status_field() {
+        let mut b = bollard::models::BuildInfo::default();
+        b.status = Some("Downloading".into());
+        assert_eq!(build_info_to_json(&b)["status"], json!("Downloading"));
+    }
+
+    #[test]
+    fn kv_pairs_duplicate_key_appends_values() {
+        let input = vec![("tag".into(), "a".into()), ("tag".into(), "b".into())];
+        let out = kv_pairs(&input);
+        assert_eq!(out["tag"], vec!["a", "b"]);
+    }
+
+    #[test]
+    fn build_info_to_json_id_when_set() {
+        let mut b = bollard::models::BuildInfo::default();
+        b.id = Some("sha256:abc".into());
+        assert_eq!(build_info_to_json(&b)["id"], json!("sha256:abc"));
+    }
+
+    #[test]
+    fn parse_port_binding_host_only_numeric() {
+        let (host, container, proto) = parse_port_binding("3000").unwrap();
+        assert_eq!(host, "3000");
+        assert_eq!(container, "3000");
+        assert_eq!(proto, None);
+    }
+
+    #[test]
+    fn build_info_to_json_error_field() {
+        let mut b = bollard::models::BuildInfo::default();
+        b.error = Some("failed".into());
+        assert_eq!(build_info_to_json(&b)["error"], json!("failed"));
+    }
+
+    #[test]
+    fn build_info_to_json_progress_field() {
+        let mut b = bollard::models::BuildInfo::default();
+        b.progress = Some("5/10".into());
+        assert_eq!(build_info_to_json(&b)["progress"], json!("5/10"));
+    }
+
+    #[test]
+    fn parse_kv_value_contains_equals() {
+        let (k, v) = parse_kv("JWT=a.b=c").unwrap();
+        assert_eq!(k, "JWT");
+        assert_eq!(v, "a.b=c");
+    }
+
+    #[test]
+    fn label_vec_to_map_last_duplicate_key_wins() {
+        let m = label_vec_to_map(&["k=1".into(), "k=2".into()]);
+        assert_eq!(m["k"], "2");
+    }
+
+    #[test]
+    fn parse_port_binding_tcp_protocol() {
+        let (_, _, proto) = parse_port_binding("8080:80/tcp").unwrap();
+        assert_eq!(proto, Some("tcp".into()));
+    }
+
+    #[test]
+    fn build_info_to_json_aux_id_when_set() {
+        let mut b = bollard::models::BuildInfo::default();
+        b.aux = Some(bollard::models::ImageId {
+            id: Some("aux-id".into()),
+        });
+        assert_eq!(build_info_to_json(&b)["aux"]["ID"], json!("aux-id"));
+    }
+
+    #[test]
+    fn emit_ndjson_number() {
+        let mut buf = Vec::new();
+        emit_ndjson(&mut buf, &JsonValue::from(42)).unwrap();
+        assert_eq!(String::from_utf8(buf).unwrap(), "42\n");
+    }
+
+    #[test]
+    fn parse_port_binding_sctp_protocol() {
+        let (_, _, proto) = parse_port_binding("8080:80/sctp").unwrap();
+        assert_eq!(proto, Some("sctp".into()));
+    }
 }
