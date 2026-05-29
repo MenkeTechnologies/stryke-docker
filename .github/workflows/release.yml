@@ -59,7 +59,7 @@ jobs:
           cd ../../..
           sha256sum stryke-docker-${{ github.ref_name }}-${{ matrix.target }}.tar.gz \
               > stryke-docker-${{ github.ref_name }}-${{ matrix.target }}.tar.gz.sha256
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: stryke-docker-${{ matrix.target }}
           path: |
