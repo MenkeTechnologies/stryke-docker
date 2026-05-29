@@ -1952,4 +1952,44 @@ mod tests {
         assert_eq!(k, "flag");
         assert_eq!(v, "");
     }
+
+    // ─── parse_port_binding contract pins ────────────────────────────
+    //
+    // The port-binding mini-grammar (`host[:container][/proto]`) is the
+    // surface that `docker run -p ...` users hit first; small parser
+    // drift turns into "my port mapping silently does nothing." Pin
+    // the corners.
+
+    #[test]
+    fn parse_port_binding_bare_port_mirrors_host_and_container() {
+        // No colon → same port on host and inside container.
+        let (h, c, p) = parse_port_binding("8080").unwrap();
+        assert_eq!(h, "8080");
+        assert_eq!(c, "8080");
+        assert!(p.is_none());
+    }
+
+    #[test]
+    fn parse_port_binding_host_colon_container_splits_at_first_colon() {
+        let (h, c, p) = parse_port_binding("8080:3000").unwrap();
+        assert_eq!(h, "8080");
+        assert_eq!(c, "3000");
+        assert!(p.is_none());
+    }
+
+    #[test]
+    fn parse_port_binding_proto_suffix_is_captured() {
+        let (h, c, p) = parse_port_binding("53:53/udp").unwrap();
+        assert_eq!(h, "53");
+        assert_eq!(c, "53");
+        assert_eq!(p.as_deref(), Some("udp"));
+    }
+
+    #[test]
+    fn parse_port_binding_bare_port_with_proto() {
+        let (h, c, p) = parse_port_binding("9000/tcp").unwrap();
+        assert_eq!(h, "9000");
+        assert_eq!(c, "9000");
+        assert_eq!(p.as_deref(), Some("tcp"));
+    }
 }
