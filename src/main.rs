@@ -2088,4 +2088,117 @@ mod tests {
         let err = parse_cli(&["inspect"]).expect_err("missing container");
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
     }
+
+    // ─── clap parsing — additional Cmd surfaces (round 2) ──────────────
+    // Previous round pinned ping/run/rm/stop/inspect. These pin: logs
+    // stdout/stderr both default true (otherwise quiet logs); exec --cmd
+    // is required at parse (per `required = true`); pull/push/tag/rmi
+    // image positional; stats --stream off by default (one snapshot per
+    // docs); and the Conn flatten exposes --host / --timeout as global
+    // flags wired through to cli.conn.
+
+    #[test]
+    fn cli_logs_stdout_and_stderr_both_default_true() {
+        // Pin: `docker logs c` with no streams flagged emits both stdout
+        // and stderr by default. Drift to false would silently mute one.
+        let cli = parse_cli(&["logs", "c1"]).expect("parse");
+        match cli.cmd {
+            Cmd::Logs {
+                stdout,
+                stderr,
+                follow,
+                ..
+            } => {
+                assert!(stdout);
+                assert!(stderr);
+                assert!(!follow);
+            }
+            _ => panic!("expected Logs"),
+        }
+    }
+
+    #[test]
+    fn cli_exec_requires_cmd_flag_and_container() {
+        // Pin: `exec` requires both <container> positional AND --cmd flag
+        // with at least 1 value (per num_args = 1..). Without --cmd there
+        // would be nothing to exec — clap must reject.
+        use clap::error::ErrorKind::MissingRequiredArgument;
+        assert_eq!(
+            parse_cli(&["exec"]).unwrap_err().kind(),
+            MissingRequiredArgument
+        );
+        assert_eq!(
+            parse_cli(&["exec", "c1"]).unwrap_err().kind(),
+            MissingRequiredArgument
+        );
+        let cli = parse_cli(&["exec", "c1", "--cmd", "ls", "-la"]).expect("parse");
+        match cli.cmd {
+            Cmd::Exec { container, cmd, .. } => {
+                assert_eq!(container, "c1");
+                assert_eq!(cmd, vec!["ls", "-la"]);
+            }
+            _ => panic!("expected Exec"),
+        }
+    }
+
+    #[test]
+    fn cli_pull_push_tag_image_positionals_required() {
+        use clap::error::ErrorKind::MissingRequiredArgument;
+        assert_eq!(
+            parse_cli(&["pull"]).unwrap_err().kind(),
+            MissingRequiredArgument
+        );
+        assert_eq!(
+            parse_cli(&["push"]).unwrap_err().kind(),
+            MissingRequiredArgument
+        );
+        assert_eq!(
+            parse_cli(&["tag"]).unwrap_err().kind(),
+            MissingRequiredArgument
+        );
+        // tag also requires target (2 positionals)
+        assert_eq!(
+            parse_cli(&["tag", "src"]).unwrap_err().kind(),
+            MissingRequiredArgument
+        );
+        let cli = parse_cli(&["tag", "src:1", "dst:2"]).expect("parse");
+        match cli.cmd {
+            Cmd::Tag { source, target } => {
+                assert_eq!(source, "src:1");
+                assert_eq!(target, "dst:2");
+            }
+            _ => panic!("expected Tag"),
+        }
+    }
+
+    #[test]
+    fn cli_stats_stream_default_off_one_snapshot() {
+        // Pin: `docker stats c` without --stream returns a single snapshot
+        // (docs: "Without `--stream`, one snapshot."). Drift to default-on
+        // would block the helper indefinitely on stats calls.
+        let cli = parse_cli(&["stats", "c1"]).expect("parse");
+        match cli.cmd {
+            Cmd::Stats { container, stream } => {
+                assert_eq!(container, "c1");
+                assert!(!stream);
+            }
+            _ => panic!("expected Stats"),
+        }
+    }
+
+    #[test]
+    fn cli_conn_host_and_timeout_global_flow_through() {
+        // Pin: --host and --timeout live on the flattened Conn struct and
+        // are `global = true`, so they accept being placed before OR after
+        // the subcommand. Default timeout = 120s per docker SDK convention.
+        let cli = parse_cli(&["--host", "tcp://x:2376", "ping"]).expect("parse");
+        assert_eq!(cli.conn.host.as_deref(), Some("tcp://x:2376"));
+        assert_eq!(cli.conn.timeout, 120);
+        assert!(matches!(cli.cmd, Cmd::Ping));
+
+        // global=true => placement after subcommand also works.
+        let cli = parse_cli(&["ping", "--timeout", "30"]).expect("parse");
+        assert_eq!(cli.conn.timeout, 30);
+        assert!(cli.conn.host.is_none());
+    }
 }
