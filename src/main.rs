@@ -16,7 +16,10 @@ use bollard::container::{
     RestartContainerOptions, StartContainerOptions, StatsOptions, StopContainerOptions,
 };
 use bollard::exec::{CreateExecOptions, StartExecOptions, StartExecResults};
-use bollard::image::{BuildImageOptions, CreateImageOptions, ListImagesOptions, PushImageOptions, RemoveImageOptions, TagImageOptions};
+use bollard::image::{
+    BuildImageOptions, CreateImageOptions, ListImagesOptions, PushImageOptions, RemoveImageOptions,
+    TagImageOptions,
+};
 use bollard::network::{CreateNetworkOptions, ListNetworksOptions};
 use bollard::secret::{HostConfig, PortBinding, RestartPolicy, RestartPolicyNameEnum};
 use bollard::system::EventsOptions;
@@ -82,7 +85,9 @@ enum Cmd {
         filters: Vec<(String, String)>,
     },
     /// Inspect a container.
-    Inspect { container: String },
+    Inspect {
+        container: String,
+    },
     /// Create + start a container. Combine of `create` + `start`.
     Run {
         image: String,
@@ -146,7 +151,9 @@ enum Cmd {
         #[arg(long)]
         tty: bool,
     },
-    Start { container: String },
+    Start {
+        container: String,
+    },
     Stop {
         container: String,
         #[arg(long, short = 't')]
@@ -274,7 +281,9 @@ enum Cmd {
         label: Vec<String>,
     },
     /// Remove a network.
-    NetworkRm { name: String },
+    NetworkRm {
+        name: String,
+    },
 
     /// List volumes.
     Volumes {
@@ -334,28 +343,87 @@ async fn run(cli: Cli) -> Result<()> {
         Cmd::Ping => cmd_ping(&docker).await,
         Cmd::Version => cmd_version(&docker).await,
         Cmd::Info => cmd_info(&docker).await,
-        Cmd::Events { since, until, filters } => cmd_events(&docker, since, until, filters).await,
-        Cmd::Ps { all, limit, size, filters } => cmd_ps(&docker, all, limit, size, filters).await,
+        Cmd::Events {
+            since,
+            until,
+            filters,
+        } => cmd_events(&docker, since, until, filters).await,
+        Cmd::Ps {
+            all,
+            limit,
+            size,
+            filters,
+        } => cmd_ps(&docker, all, limit, size, filters).await,
         Cmd::Inspect { container } => cmd_inspect(&docker, &container).await,
         Cmd::Run {
-            image, name, cmd, env, port, volume, label, network, workdir, user, hostname,
-            restart, rm, detach: _, tty,
+            image,
+            name,
+            cmd,
+            env,
+            port,
+            volume,
+            label,
+            network,
+            workdir,
+            user,
+            hostname,
+            restart,
+            rm,
+            detach: _,
+            tty,
         } => {
             cmd_create_or_run(
-                &docker, &image, name.as_deref(), &cmd, &env, &port, &volume, &label,
-                network.as_deref(), workdir.as_deref(), user.as_deref(),
-                hostname.as_deref(), restart.as_deref(), rm, tty, true,
+                &docker,
+                &image,
+                name.as_deref(),
+                &cmd,
+                &env,
+                &port,
+                &volume,
+                &label,
+                network.as_deref(),
+                workdir.as_deref(),
+                user.as_deref(),
+                hostname.as_deref(),
+                restart.as_deref(),
+                rm,
+                tty,
+                true,
             )
             .await
         }
         Cmd::Create {
-            image, name, cmd, env, port, volume, label, network, workdir, user, hostname,
-            restart, tty,
+            image,
+            name,
+            cmd,
+            env,
+            port,
+            volume,
+            label,
+            network,
+            workdir,
+            user,
+            hostname,
+            restart,
+            tty,
         } => {
             cmd_create_or_run(
-                &docker, &image, name.as_deref(), &cmd, &env, &port, &volume, &label,
-                network.as_deref(), workdir.as_deref(), user.as_deref(),
-                hostname.as_deref(), restart.as_deref(), false, tty, false,
+                &docker,
+                &image,
+                name.as_deref(),
+                &cmd,
+                &env,
+                &port,
+                &volume,
+                &label,
+                network.as_deref(),
+                workdir.as_deref(),
+                user.as_deref(),
+                hostname.as_deref(),
+                restart.as_deref(),
+                false,
+                tty,
+                false,
             )
             .await
         }
@@ -363,40 +431,125 @@ async fn run(cli: Cli) -> Result<()> {
         Cmd::Stop { container, time } => cmd_stop(&docker, &container, time).await,
         Cmd::Restart { container, time } => cmd_restart(&docker, &container, time).await,
         Cmd::Kill { container, signal } => cmd_kill(&docker, &container, signal.as_deref()).await,
-        Cmd::Rm { container, force, volumes } => cmd_rm(&docker, &container, force, volumes).await,
-        Cmd::Logs { container, tail, since, until, follow, timestamps, stdout, stderr } => {
-            cmd_logs(&docker, &container, tail.as_deref(), since, until, follow, timestamps, stdout, stderr).await
+        Cmd::Rm {
+            container,
+            force,
+            volumes,
+        } => cmd_rm(&docker, &container, force, volumes).await,
+        Cmd::Logs {
+            container,
+            tail,
+            since,
+            until,
+            follow,
+            timestamps,
+            stdout,
+            stderr,
+        } => {
+            cmd_logs(
+                &docker,
+                &container,
+                tail.as_deref(),
+                since,
+                until,
+                follow,
+                timestamps,
+                stdout,
+                stderr,
+            )
+            .await
         }
-        Cmd::Exec { container, cmd, env, workdir, user, tty } => {
-            cmd_exec(&docker, &container, &cmd, &env, workdir.as_deref(), user.as_deref(), tty).await
+        Cmd::Exec {
+            container,
+            cmd,
+            env,
+            workdir,
+            user,
+            tty,
+        } => {
+            cmd_exec(
+                &docker,
+                &container,
+                &cmd,
+                &env,
+                workdir.as_deref(),
+                user.as_deref(),
+                tty,
+            )
+            .await
         }
         Cmd::Stats { container, stream } => cmd_stats(&docker, &container, stream).await,
         Cmd::Images { all, filters } => cmd_images(&docker, all, filters).await,
         Cmd::Pull { image, platform } => cmd_pull(&docker, &image, platform.as_deref()).await,
         Cmd::Push { image } => cmd_push(&docker, &image).await,
-        Cmd::Rmi { image, force, noprune } => cmd_rmi(&docker, &image, force, noprune).await,
+        Cmd::Rmi {
+            image,
+            force,
+            noprune,
+        } => cmd_rmi(&docker, &image, force, noprune).await,
         Cmd::Tag { source, target } => cmd_tag(&docker, &source, &target).await,
         Cmd::Build {
-            dir, tag, dockerfile, build_args, no_cache, pull, rm,
+            dir,
+            tag,
+            dockerfile,
+            build_args,
+            no_cache,
+            pull,
+            rm,
         } => {
             cmd_build(
-                &docker, &dir, tag.as_deref(), dockerfile.as_deref(),
-                &build_args, no_cache, pull, rm,
+                &docker,
+                &dir,
+                tag.as_deref(),
+                dockerfile.as_deref(),
+                &build_args,
+                no_cache,
+                pull,
+                rm,
             )
             .await
         }
         Cmd::Networks { filters } => cmd_networks(&docker, filters).await,
-        Cmd::NetworkCreate { name, driver, subnet, gateway, label } => {
-            cmd_network_create(&docker, &name, &driver, subnet.as_deref(), gateway.as_deref(), &label).await
+        Cmd::NetworkCreate {
+            name,
+            driver,
+            subnet,
+            gateway,
+            label,
+        } => {
+            cmd_network_create(
+                &docker,
+                &name,
+                &driver,
+                subnet.as_deref(),
+                gateway.as_deref(),
+                &label,
+            )
+            .await
         }
         Cmd::NetworkRm { name } => cmd_network_rm(&docker, &name).await,
         Cmd::Volumes { filters } => cmd_volumes(&docker, filters).await,
-        Cmd::VolumeCreate { name, driver, label } => {
-            cmd_volume_create(&docker, &name, &driver, &label).await
-        }
+        Cmd::VolumeCreate {
+            name,
+            driver,
+            label,
+        } => cmd_volume_create(&docker, &name, &driver, &label).await,
         Cmd::VolumeRm { name, force } => cmd_volume_rm(&docker, &name, force).await,
-        Cmd::Prune { containers, images, volumes, networks, all } => {
-            cmd_prune(&docker, containers || all, images || all, volumes || all, networks || all).await
+        Cmd::Prune {
+            containers,
+            images,
+            volumes,
+            networks,
+            all,
+        } => {
+            cmd_prune(
+                &docker,
+                containers || all,
+                images || all,
+                volumes || all,
+                networks || all,
+            )
+            .await
         }
     }
 }
@@ -412,7 +565,11 @@ fn make_client(c: &Conn) -> Result<Docker> {
             Docker::connect_with_unix(path, c.timeout, bollard::API_DEFAULT_VERSION)
                 .context("connect_with_unix")?
         }
-        Some(url) if url.starts_with("tcp://") || url.starts_with("http://") || url.starts_with("https://") => {
+        Some(url)
+            if url.starts_with("tcp://")
+                || url.starts_with("http://")
+                || url.starts_with("https://") =>
+        {
             Docker::connect_with_http(url, c.timeout, bollard::API_DEFAULT_VERSION)
                 .context("connect_with_http")?
         }
@@ -459,7 +616,10 @@ fn parse_port_binding(spec: &str) -> Result<(String, String, Option<String>)> {
 
 fn label_vec_to_map(v: &[String]) -> HashMap<String, String> {
     v.iter()
-        .filter_map(|s| s.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+        .filter_map(|s| {
+            s.split_once('=')
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+        })
         .collect()
 }
 
@@ -521,7 +681,10 @@ async fn cmd_ps(
         size,
         filters: kv_pairs(&filters),
     };
-    let list = d.list_containers(Some(opts)).await.context("list_containers")?;
+    let list = d
+        .list_containers(Some(opts))
+        .await
+        .context("list_containers")?;
     let stdout = io::stdout();
     let mut out = BufWriter::new(stdout.lock());
     for c in list {
@@ -531,7 +694,10 @@ async fn cmd_ps(
 }
 
 async fn cmd_inspect(d: &Docker, container: &str) -> Result<()> {
-    let info = d.inspect_container(container, None).await.context("inspect")?;
+    let info = d
+        .inspect_container(container, None)
+        .await
+        .context("inspect")?;
     emit_json(&info)
 }
 
@@ -578,7 +744,11 @@ async fn cmd_create_or_run(
         } else {
             Some(volumes.to_vec())
         },
-        port_bindings: if bindings.is_empty() { None } else { Some(bindings) },
+        port_bindings: if bindings.is_empty() {
+            None
+        } else {
+            Some(bindings)
+        },
         auto_remove: if auto_remove { Some(true) } else { None },
         network_mode: network.map(|n| n.to_string()),
         restart_policy: restart.map(|r| RestartPolicy {
@@ -596,9 +766,21 @@ async fn cmd_create_or_run(
 
     let cfg = ContainerConfig::<String> {
         image: Some(image.to_string()),
-        cmd: if cmd.is_empty() { None } else { Some(cmd.to_vec()) },
-        env: if env.is_empty() { None } else { Some(env.to_vec()) },
-        exposed_ports: if exposed.is_empty() { None } else { Some(exposed) },
+        cmd: if cmd.is_empty() {
+            None
+        } else {
+            Some(cmd.to_vec())
+        },
+        env: if env.is_empty() {
+            None
+        } else {
+            Some(env.to_vec())
+        },
+        exposed_ports: if exposed.is_empty() {
+            None
+        } else {
+            Some(exposed)
+        },
         labels: if labels.is_empty() {
             None
         } else {
@@ -664,7 +846,9 @@ async fn cmd_restart(d: &Docker, c: &str, t: Option<isize>) -> Result<()> {
 async fn cmd_kill(d: &Docker, c: &str, signal: Option<&str>) -> Result<()> {
     d.kill_container(
         c,
-        signal.map(|s| KillContainerOptions { signal: s.to_string() }),
+        signal.map(|s| KillContainerOptions {
+            signal: s.to_string(),
+        }),
     )
     .await
     .context("kill_container")?;
@@ -674,7 +858,11 @@ async fn cmd_kill(d: &Docker, c: &str, signal: Option<&str>) -> Result<()> {
 async fn cmd_rm(d: &Docker, c: &str, force: bool, v: bool) -> Result<()> {
     d.remove_container(
         c,
-        Some(RemoveContainerOptions { force, v, link: false }),
+        Some(RemoveContainerOptions {
+            force,
+            v,
+            link: false,
+        }),
     )
     .await
     .context("remove_container")?;
@@ -743,7 +931,11 @@ async fn cmd_exec(
             container,
             CreateExecOptions {
                 cmd: Some(cmd.to_vec()),
-                env: if env.is_empty() { None } else { Some(env.to_vec()) },
+                env: if env.is_empty() {
+                    None
+                } else {
+                    Some(env.to_vec())
+                },
                 working_dir: workdir.map(|s| s.to_string()),
                 user: user.map(|s| s.to_string()),
                 attach_stdout: Some(true),
@@ -755,7 +947,14 @@ async fn cmd_exec(
         .await
         .context("create_exec")?;
     let started = d
-        .start_exec(&exec.id, Some(StartExecOptions { detach: false, tty, output_capacity: None }))
+        .start_exec(
+            &exec.id,
+            Some(StartExecOptions {
+                detach: false,
+                tty,
+                output_capacity: None,
+            }),
+        )
         .await
         .context("start_exec")?;
     let stdout = io::stdout();
@@ -790,7 +989,10 @@ async fn cmd_exec(
 }
 
 async fn cmd_stats(d: &Docker, container: &str, stream: bool) -> Result<()> {
-    let opts = StatsOptions { stream, one_shot: !stream };
+    let opts = StatsOptions {
+        stream,
+        one_shot: !stream,
+    };
     let mut s = d.stats(container, Some(opts));
     let stdout = io::stdout();
     let mut out = BufWriter::new(stdout.lock());
@@ -809,11 +1011,7 @@ async fn cmd_stats(d: &Docker, container: &str, stream: bool) -> Result<()> {
 /* images                                                                    */
 /* ------------------------------------------------------------------------- */
 
-async fn cmd_images(
-    d: &Docker,
-    all: bool,
-    filters: Vec<(String, String)>,
-) -> Result<()> {
+async fn cmd_images(d: &Docker, all: bool, filters: Vec<(String, String)>) -> Result<()> {
     let opts = ListImagesOptions::<String> {
         all,
         digests: false,
@@ -915,11 +1113,21 @@ async fn cmd_build(
 
 fn build_info_to_json(b: &bollard::models::BuildInfo) -> JsonValue {
     let mut m = serde_json::Map::new();
-    if let Some(v) = &b.id { m.insert("id".into(), JsonValue::String(v.clone())); }
-    if let Some(v) = &b.stream { m.insert("stream".into(), JsonValue::String(v.clone())); }
-    if let Some(v) = &b.error { m.insert("error".into(), JsonValue::String(v.clone())); }
-    if let Some(v) = &b.status { m.insert("status".into(), JsonValue::String(v.clone())); }
-    if let Some(v) = &b.progress { m.insert("progress".into(), JsonValue::String(v.clone())); }
+    if let Some(v) = &b.id {
+        m.insert("id".into(), JsonValue::String(v.clone()));
+    }
+    if let Some(v) = &b.stream {
+        m.insert("stream".into(), JsonValue::String(v.clone()));
+    }
+    if let Some(v) = &b.error {
+        m.insert("error".into(), JsonValue::String(v.clone()));
+    }
+    if let Some(v) = &b.status {
+        m.insert("status".into(), JsonValue::String(v.clone()));
+    }
+    if let Some(v) = &b.progress {
+        m.insert("progress".into(), JsonValue::String(v.clone()));
+    }
     if let Some(v) = &b.aux {
         if let Some(id) = &v.id {
             m.insert("aux".into(), json!({ "ID": id }));
@@ -941,8 +1149,8 @@ fn build_info_to_json(b: &bollard::models::BuildInfo) -> JsonValue {
 }
 
 fn tar_gzip_directory(dir: &Path) -> Result<Vec<u8>> {
-    let dir = std::fs::canonicalize(dir)
-        .with_context(|| format!("canonicalize {}", dir.display()))?;
+    let dir =
+        std::fs::canonicalize(dir).with_context(|| format!("canonicalize {}", dir.display()))?;
     if !dir.is_dir() {
         bail!("build context `{}` is not a directory", dir.display());
     }
@@ -966,8 +1174,8 @@ fn tar_gzip_directory(dir: &Path) -> Result<Vec<u8>> {
                 .append_dir(rel, path)
                 .with_context(|| format!("tar dir {}", rel.display()))?;
         } else if meta.is_file() {
-            let mut f = std::fs::File::open(path)
-                .with_context(|| format!("open {}", path.display()))?;
+            let mut f =
+                std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
             builder
                 .append_file(rel, &mut f)
                 .with_context(|| format!("tar file {}", rel.display()))?;
@@ -982,11 +1190,10 @@ fn tar_gzip_directory(dir: &Path) -> Result<Vec<u8>> {
 /* networks                                                                  */
 /* ------------------------------------------------------------------------- */
 
-async fn cmd_networks(
-    d: &Docker,
-    filters: Vec<(String, String)>,
-) -> Result<()> {
-    let opts = ListNetworksOptions::<String> { filters: kv_pairs(&filters) };
+async fn cmd_networks(d: &Docker, filters: Vec<(String, String)>) -> Result<()> {
+    let opts = ListNetworksOptions::<String> {
+        filters: kv_pairs(&filters),
+    };
     let list = d.list_networks(Some(opts)).await.context("list_networks")?;
     let stdout = io::stdout();
     let mut out = BufWriter::new(stdout.lock());
@@ -1039,7 +1246,9 @@ async fn cmd_network_rm(d: &Docker, name: &str) -> Result<()> {
 /* ------------------------------------------------------------------------- */
 
 async fn cmd_volumes(d: &Docker, filters: Vec<(String, String)>) -> Result<()> {
-    let opts = ListVolumesOptions::<String> { filters: kv_pairs(&filters) };
+    let opts = ListVolumesOptions::<String> {
+        filters: kv_pairs(&filters),
+    };
     let r = d.list_volumes(Some(opts)).await.context("list_volumes")?;
     let stdout = io::stdout();
     let mut out = BufWriter::new(stdout.lock());
@@ -1051,12 +1260,7 @@ async fn cmd_volumes(d: &Docker, filters: Vec<(String, String)>) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_volume_create(
-    d: &Docker,
-    name: &str,
-    driver: &str,
-    labels: &[String],
-) -> Result<()> {
+async fn cmd_volume_create(d: &Docker, name: &str, driver: &str, labels: &[String]) -> Result<()> {
     let opts = CreateVolumeOptions::<String> {
         name: name.to_string(),
         driver: driver.to_string(),
@@ -1126,6 +1330,7 @@ fn _read_marker() {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
 
@@ -1313,7 +1518,10 @@ mod tests {
         let j = build_info_to_json(&b);
         let obj = j.as_object().unwrap();
         assert_eq!(obj.get("id").and_then(|v| v.as_str()), Some("img1"));
-        assert_eq!(obj.get("stream").and_then(|v| v.as_str()), Some("Step 1/3\n"));
+        assert_eq!(
+            obj.get("stream").and_then(|v| v.as_str()),
+            Some("Step 1/3\n")
+        );
         // Unset fields are NOT included (skip-if-None semantics).
         assert!(!obj.contains_key("error"));
         assert!(!obj.contains_key("status"));
@@ -1342,7 +1550,10 @@ mod tests {
     #[test]
     fn parse_port_binding_host_container_proto_all_three() {
         let (h, c, p) = parse_port_binding("3000:80/tcp").unwrap();
-        assert_eq!((h.as_str(), c.as_str(), p.as_deref()), ("3000", "80", Some("tcp")));
+        assert_eq!(
+            (h.as_str(), c.as_str(), p.as_deref()),
+            ("3000", "80", Some("tcp"))
+        );
     }
 
     #[test]
@@ -1409,9 +1620,8 @@ mod tests {
 
     #[test]
     fn kv_pairs_many_keys_no_collision() {
-        let input: Vec<(String, String)> = (0..5)
-            .map(|i| (format!("k{i}"), format!("v{i}")))
-            .collect();
+        let input: Vec<(String, String)> =
+            (0..5).map(|i| (format!("k{i}"), format!("v{i}"))).collect();
         let out = kv_pairs(&input);
         assert_eq!(out.len(), 5);
         assert_eq!(out["k3"], vec!["v3"]);
@@ -1690,7 +1900,10 @@ mod tests {
             current: Some(1),
             total: None,
         });
-        assert_eq!(build_info_to_json(&b)["progressDetail"]["current"], json!(1));
+        assert_eq!(
+            build_info_to_json(&b)["progressDetail"]["current"],
+            json!(1)
+        );
     }
 
     #[test]
