@@ -1992,4 +1992,100 @@ mod tests {
         assert_eq!(c, "9000");
         assert_eq!(p.as_deref(), Some("tcp"));
     }
+
+    // ─── clap parsing — Cli top-level + Cmd variants ────────────────────
+    // Pin the CLI contract surface that callers (stryke `qx` wrappers,
+    // shell scripts) bind against. Drift in defaults or required-arg
+    // wiring would silently change behaviour without any runtime error.
+
+    use clap::Parser;
+
+    fn parse_cli(args: &[&str]) -> Result<Cli, clap::Error> {
+        let mut argv = vec!["stryke-docker-helper"];
+        argv.extend_from_slice(args);
+        Cli::try_parse_from(argv)
+    }
+
+    #[test]
+    fn cli_ping_unit_variant_no_conn_required() {
+        let cli = parse_cli(&["ping"]).expect("parse");
+        assert!(matches!(cli.cmd, Cmd::Ping));
+    }
+
+    #[test]
+    fn cli_run_image_positional_required() {
+        let err = parse_cli(&["run"]).expect_err("missing image");
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn cli_run_detach_defaults_true_and_rm_defaults_false() {
+        // Pin: docker run from a helper context defaults to detached
+        // (-d), otherwise the helper process would block on stdout
+        // streaming. --rm must be opt-in to avoid surprising auto-cleanup.
+        let cli = parse_cli(&["run", "alpine"]).expect("parse");
+        match cli.cmd {
+            Cmd::Run { detach, rm, .. } => {
+                assert!(detach);
+                assert!(!rm);
+            }
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn cli_rm_force_and_volumes_default_false() {
+        // Pin safety: bare `rm <c>` must NOT auto-force-kill or wipe
+        // volumes. Both require explicit opt-in.
+        let cli = parse_cli(&["rm", "mycontainer"]).expect("parse");
+        match cli.cmd {
+            Cmd::Rm { force, volumes, .. } => {
+                assert!(!force);
+                assert!(!volumes);
+            }
+            _ => panic!("expected Rm"),
+        }
+    }
+
+    #[test]
+    fn cli_run_repeatable_flags_collect_into_vecs() {
+        // -e, -p, -v, -l are all `num_args = 0..` and repeatable.
+        // Pin: each flag instance appends; not last-wins.
+        let cli = parse_cli(&[
+            "run",
+            "img",
+            "-e",
+            "A=1",
+            "-e",
+            "B=2",
+            "-p",
+            "8080:80",
+            "-p",
+            "9090:9090",
+            "-v",
+            "/a:/b",
+        ])
+        .expect("parse");
+        match cli.cmd {
+            Cmd::Run {
+                env, port, volume, ..
+            } => {
+                assert_eq!(env, vec!["A=1", "B=2"]);
+                assert_eq!(port, vec!["8080:80", "9090:9090"]);
+                assert_eq!(volume, vec!["/a:/b"]);
+            }
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn cli_stop_time_optional_and_inspect_requires_container() {
+        let cli = parse_cli(&["stop", "c1"]).expect("parse");
+        match cli.cmd {
+            Cmd::Stop { time, .. } => assert!(time.is_none()),
+            _ => panic!("expected Stop"),
+        }
+        let err = parse_cli(&["inspect"]).expect_err("missing container");
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+    }
 }
