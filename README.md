@@ -311,7 +311,7 @@ stryke-docker/
   stryke.toml                      # stryke package manifest
   Cargo.toml                       # Rust helper crate manifest
   Makefile
-  src/main.rs                      # single-file helper, ~700 LOC
+  src/main.rs                      # single-file helper
   lib/
     Docker.stk                     # `use Docker`
   bin/
