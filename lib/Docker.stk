@@ -20,6 +20,7 @@ package Docker
 
 # ── error dispatch ────────────────────────────────────────────────────
 
+## Decode the cdylib's JSON return; die on `{error}` payload.
 fn Docker::_decode ($name, $json) {
     my $o = from_json $json
     if (ref $o eq "HASH" && exists $o->{error}) {
@@ -28,6 +29,7 @@ fn Docker::_decode ($name, $json) {
     $o
 }
 
+## Build the FFI request hash by merging the caller's connection opts.
 fn Docker::_req ($extra, $opts) {
     my %r = %$extra
     $r{host} = $opts->{host} if exists $opts->{host} && defined $opts->{host}
@@ -36,31 +38,37 @@ fn Docker::_req ($extra, $opts) {
 
 # ── version + ping ──────────────────────────────────────────────────
 
+## Return the package version string.
 fn Docker::version (%opts) {
     Docker::_decode("version", docker__version(to_json(Docker::_req({}, \%opts))))
 }
 
+## Return the cdylib's `CARGO_PKG_VERSION` string.
 fn Docker::pkg_version {
     Docker::_decode("pkg_version", docker__pkg_version("{}"))->{version}
 }
 
+## Connectivity probe — returns 1 on success, 0 on failure.
 fn Docker::ping (%opts) {
     my $o = Docker::_decode("ping", docker__ping(to_json(Docker::_req({}, \%opts))))
     lc($o->{value} // "") eq "ok"
 }
 
+## dockerd info hash (storage driver, plugins, etc.).
 fn Docker::info (%opts) {
     Docker::_decode("info", docker__info(to_json(Docker::_req({}, \%opts))))
 }
 
 # ── containers ───────────────────────────────────────────────────────
 
+## List containers (running by default; pass `all => 1`).
 fn Docker::ps (%opts) {
     my $r = Docker::_req({ all => ($opts{all} ? \1 : \0) }, \%opts)
     my $o = Docker::_decode("ps", docker__ps(to_json($r)))
     @{ $o->{containers} }
 }
 
+## Full inspect output for one container.
 fn Docker::inspect ($container, %opts) {
     Docker::_decode("inspect",
         docker__inspect(to_json(Docker::_req({ container => $container }, \%opts))))
@@ -85,26 +93,31 @@ fn Docker::run ($image, %opts) {
     Docker::create($image, %opts)
 }
 
+## Start an existing container by name/id; returns 1 on success.
 fn Docker::start ($container, %opts) {
     Docker::_decode("start",
         docker__start(to_json(Docker::_req({ container => $container }, \%opts))))->{ok} ? 1 : 0
 }
 
+## Stop a container (optional `timeout` seconds); returns 1 on success.
 fn Docker::stop ($container, %opts) {
     Docker::_decode("stop",
         docker__stop(to_json(Docker::_req({ container => $container, timeout => $opts{timeout} }, \%opts))))->{ok} ? 1 : 0
 }
 
+## Restart a container; returns 1 on success.
 fn Docker::restart ($container, %opts) {
     Docker::_decode("restart",
         docker__restart(to_json(Docker::_req({ container => $container }, \%opts))))->{ok} ? 1 : 0
 }
 
+## Send a signal (default SIGKILL) to a container; returns 1 on success.
 fn Docker::kill ($container, %opts) {
     Docker::_decode("kill",
         docker__kill(to_json(Docker::_req({ container => $container, signal => $opts{signal} }, \%opts))))->{ok} ? 1 : 0
 }
 
+## Remove a container; opts: `force`, `volumes`. Returns 1 on success.
 fn Docker::rm ($container, %opts) {
     my $r = Docker::_req(
         { container => $container,
@@ -117,6 +130,7 @@ fn Docker::rm ($container, %opts) {
 
 # ── logs + exec ──────────────────────────────────────────────────────
 
+## Snapshot logs of a container as a single string. `tail => N` to limit.
 fn Docker::logs ($container, %opts) {
     my $r = Docker::_req({ container => $container, tail => $opts{tail} }, \%opts)
     Docker::_decode("logs", docker__logs(to_json($r)))->{logs}
@@ -128,6 +142,7 @@ fn Docker::logs_follow ($container, %opts) {
     die "Docker::logs_follow: streaming ops are deferred in v0.2.0 cdylib — use `Docker::logs` for snapshot reads"
 }
 
+## Run $cmd (arrayref) inside container; returns captured stdout+stderr.
 fn Docker::exec ($container, $cmd, %opts) {
     die "Docker::exec: cmd must be arrayref" unless ref($cmd) eq "ARRAY"
     my $r = Docker::_req({ container => $container, cmd => $cmd }, \%opts)
@@ -136,47 +151,56 @@ fn Docker::exec ($container, $cmd, %opts) {
 
 # ── images ──────────────────────────────────────────────────────────
 
+## List images; `all => 1` includes intermediate layers.
 fn Docker::images (%opts) {
     my $r = Docker::_req({ all => ($opts{all} ? \1 : \0) }, \%opts)
     my $o = Docker::_decode("images", docker__images(to_json($r)))
     @{ $o->{images} }
 }
 
+## Pull an image from its registry.
 fn Docker::pull ($image, %opts) {
     Docker::_decode("pull",
         docker__pull(to_json(Docker::_req({ image => $image }, \%opts))))
 }
 
+## Push an image — deferred in v0.2.0 cdylib.
 fn Docker::push ($image, %opts) {
     die "Docker::push: deferred in v0.2.0 cdylib (registry auth surface needs design)"
 }
 
+## Remove an image; opt `force`. Returns 1 on success.
 fn Docker::rmi ($image, %opts) {
     my $r = Docker::_req({ image => $image, force => ($opts{force} ? \1 : \0) }, \%opts)
     Docker::_decode("rmi", docker__rmi(to_json($r)))->{ok} ? 1 : 0
 }
 
+## Tag $source as $target.
 fn Docker::tag ($source, $target, %opts) {
     Docker::_decode("tag",
         docker__tag(to_json(Docker::_req({ source => $source, target => $target }, \%opts))))->{ok} ? 1 : 0
 }
 
+## Build an image — deferred in v0.2.0 cdylib.
 fn Docker::build ($dir, %opts) {
     die "Docker::build: deferred in v0.2.0 cdylib (tar+stream surface needs design)"
 }
 
 # ── networks ────────────────────────────────────────────────────────
 
+## List networks.
 fn Docker::networks (%opts) {
     my $o = Docker::_decode("networks", docker__networks(to_json(Docker::_req({}, \%opts))))
     @{ $o->{networks} }
 }
 
+## Create a network. Opt `driver` (default `bridge`).
 fn Docker::network_create ($name, %opts) {
     Docker::_decode("network_create",
         docker__network_create(to_json(Docker::_req({ name => $name, driver => $opts{driver} }, \%opts))))
 }
 
+## Remove a network by name; returns 1 on success.
 fn Docker::network_rm ($name, %opts) {
     Docker::_decode("network_rm",
         docker__network_rm(to_json(Docker::_req({ name => $name }, \%opts))))->{ok} ? 1 : 0
@@ -184,16 +208,19 @@ fn Docker::network_rm ($name, %opts) {
 
 # ── volumes ─────────────────────────────────────────────────────────
 
+## List volumes.
 fn Docker::volumes (%opts) {
     my $o = Docker::_decode("volumes", docker__volumes(to_json(Docker::_req({}, \%opts))))
     $o->{volumes}
 }
 
+## Create a volume by name.
 fn Docker::volume_create ($name, %opts) {
     Docker::_decode("volume_create",
         docker__volume_create(to_json(Docker::_req({ name => $name }, \%opts))))
 }
 
+## Remove a volume; opt `force`. Returns 1 on success.
 fn Docker::volume_rm ($name, %opts) {
     my $r = Docker::_req({ name => $name, force => ($opts{force} ? \1 : \0) }, \%opts)
     Docker::_decode("volume_rm", docker__volume_rm(to_json($r)))->{ok} ? 1 : 0
@@ -201,6 +228,7 @@ fn Docker::volume_rm ($name, %opts) {
 
 # ── prune ───────────────────────────────────────────────────────────
 
+## Prune unused resources. `kind => containers|images|volumes|networks`.
 fn Docker::prune (%opts) {
     my $kind = $opts{kind} // "containers"
     Docker::_decode("prune",
@@ -209,10 +237,12 @@ fn Docker::prune (%opts) {
 
 # ── deferred streaming ops ──────────────────────────────────────────
 
+## Streaming events — deferred in v0.2.0 cdylib.
 fn Docker::events (%opts) {
     die "Docker::events: streaming ops are deferred in v0.2.0 cdylib"
 }
 
+## Streaming stats — deferred in v0.2.0 cdylib.
 fn Docker::stats ($container, %opts) {
     die "Docker::stats: streaming ops are deferred in v0.2.0 cdylib"
 }
