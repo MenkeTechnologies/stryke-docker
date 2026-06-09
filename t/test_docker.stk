@@ -1,108 +1,70 @@
-# t/test_docker.stk — round-trip against a live Docker daemon.
-#
-# Requires the cdylib to be loaded. Install once with `s pkg install -g .`
-# from the package root so stryke's FFI bridge dlopens
-# lib/libstryke_docker.{dylib,so} on `use Docker`.
-#
-# Pulls busybox:latest, runs a one-shot container, asserts output via exec.
+## t/test_docker.stk — assertion tests for the stryke `Docker` package.
+##
+## Uses stryke's native test framework (`assert_*` + `test_run`).
+## Requires the cdylib to be loaded — install once with `s pkg install -g .`
+## so stryke's FFI bridge dlopens `lib/libstryke_docker.{dylib,so}` on
+## `use Docker`. Pulls busybox:latest and exercises run/exec/network/volume
+## when a Docker daemon is reachable.
 
 use Docker
 
-val $have_cdylib = eval { Docker::pkg_version(); 1 }
-unless ($have_cdylib) {
-    p "1..0 # SKIP cdylib not loaded — run `s pkg install -g .` first"
-    exit 0
-}
+# ── permission-free: cdylib reachable ───────────────────────────────
+val $pkg_version = Docker::pkg_version()
+assert_ok $pkg_version, "Docker::pkg_version returns truthy (cdylib loaded)"
 
-unless (eval { Docker::ping() }) {
-    p "1..0 # SKIP no reachable Docker daemon (check \$DOCKER_HOST)"
-    exit 0
-}
+# ── daemon liveness ─────────────────────────────────────────────────
+val $alive = eval { Docker::ping() }
 
-val $name = "stryke-test-$$"
-val $vol  = "stryke-test-vol-$$"
-val $net  = "stryke-test-net-$$"
+if ($alive) {
+    val $name = "stryke-test-$$"
+    val $vol  = "stryke-test-vol-$$"
+    val $net  = "stryke-test-net-$$"
 
-p "1..9"
-var $i = 0
+    # version
+    val $v = Docker::version()
+    assert_ok defined $v->{Version}, "version returns Version field"
 
-# 1. version
-var $v
-eval { $v = Docker::version() }
-$i++
-p $@ ? "not ok $i - version: $@" :
-       (defined $v->{Version} ? "ok $i - version $v->{Version}" : "not ok $i - version shape")
+    # pull busybox (silent, drains stream)
+    val @pull = Docker::pull("busybox:latest")
+    assert_gt scalar(@pull), 0, "pull busybox emits events"
 
-# 2. pull busybox (silent, drains stream)
-var @pull
-eval { @pull = Docker::pull("busybox:latest") }
-$i++
-p $@ ? "not ok $i - pull: $@" :
-       (@pull > 0 ? "ok $i - pull busybox (#{len(@pull)} events)" : "not ok $i - pull empty")
-
-# 3. run busybox sleep
-var $r
-eval {
-    $r = Docker::run "busybox:latest",
+    # run busybox sleep — detached so we can exec into it
+    val $r = Docker::run("busybox:latest",
         name    => $name,
         cmd     => ["sh", "-c", "sleep 30"],
         label   => ["stryke.test=1"],
-        detach  => 1
-}
-$i++
-p $@ ? "not ok $i - run: $@" :
-       (defined $r->{id} ? "ok $i - run ($r->{id})" : "not ok $i - run wrong shape")
+        detach  => 1)
+    assert_ok defined $r->{id}, "run returns container id"
 
-# 4. ps filtered by our label includes our container
-var @ps
-eval { @ps = Docker::ps(all => 1, filters => { label => ["stryke.test=1"] }) }
-$i++
-p $@ ? "not ok $i - ps: $@" :
-       (grep { $_->{Names} && (grep { $_ =~ /\Q$name\E/ } @{$_->{Names}}) } @ps
-            ? "ok $i - ps filter (#{len(@ps)} match)"
-            : "not ok $i - ps missing $name")
+    # ps filtered by our label includes our container
+    val @ps = Docker::ps(all => 1, filters => { label => ["stryke.test=1"] })
+    val $found_ps = grep { $_->{Names} && (grep { $_ =~ /\Q$name\E/ } @{$_->{Names}}) } @ps
+    assert_ok $found_ps, "ps filter finds our container by label"
 
-# 5. inspect returns running state
-var $info
-eval { $info = Docker::inspect($name) }
-$i++
-p $@ ? "not ok $i - inspect: $@" :
-       (defined $info->{State}{Running} && $info->{State}{Running}
-            ? "ok $i - inspect running"
-            : "not ok $i - inspect: " . to_json($info->{State}))
+    # inspect returns running state
+    val $info = Docker::inspect($name)
+    assert_ok $info->{State}{Running}, "inspect: container is Running"
 
-# 6. exec echoes stdin → stdout
-var @chunks
-var $exec_r
-eval {
-    $exec_r = Docker::exec $name, ["sh", "-c", "echo hello-stryke && echo err-line 1>&2"],
+    # exec echoes stdin → stdout
+    var @chunks
+    Docker::exec $name, ["sh", "-c", "echo hello-stryke && echo err-line 1>&2"],
         callback => sub ($stream, $data) { push @chunks, [$stream, $data] }
-}
-$i++
-p $@ ? "not ok $i - exec: $@" :
-       ((grep { $_->[0] eq "stdout" && $_->[1] =~ /hello-stryke/ } @chunks)
-            ? "ok $i - exec stdout (exit=$exec_r->{exit_code})"
-            : "not ok $i - exec: " . to_json(\@chunks))
+    val $saw_stdout = grep { $_->[0] eq "stdout" && $_->[1] =~ /hello-stryke/ } @chunks
+    assert_ok $saw_stdout, "exec emits hello-stryke on stdout"
 
-# 7. network create + list + rm
-var $nc
-eval { $nc = Docker::network_create($net, driver => "bridge") }
-$i++
-p $@ ? "not ok $i - network-create: $@" :
-       (defined $nc->{Id} ? "ok $i - network-create" : "not ok $i - net wrong shape")
+    # network create
+    val $nc = Docker::network_create($net, driver => "bridge")
+    assert_ok defined $nc->{Id}, "network_create returns Id"
 
-# 8. volume create + list + rm
-var $vc
-eval { $vc = Docker::volume_create($vol) }
-$i++
-p $@ ? "not ok $i - volume-create: $@" :
-       ($vc->{Name} eq $vol ? "ok $i - volume-create" : "not ok $i - volume wrong name")
+    # volume create
+    val $vc = Docker::volume_create($vol)
+    assert_eq $vc->{Name}, $vol, "volume_create returns Name"
 
-# 9. cleanup
-eval {
+    # cleanup
     Docker::rm $name, force => 1
     Docker::network_rm $net
     Docker::volume_rm $vol
+    assert_ok 1, "cleanup (rm + network_rm + volume_rm) completed"
 }
-$i++
-p $@ ? "not ok $i - cleanup: $@" : "ok $i - cleanup"
+
+test_run

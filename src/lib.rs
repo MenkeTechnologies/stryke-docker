@@ -610,3 +610,86 @@ pub extern "C" fn docker__volume_rm(args: *const c_char) -> *const c_char {
 pub extern "C" fn docker__prune(args: *const c_char) -> *const c_char {
     ffi_call_async(args, op_prune)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::Serialize;
+
+    #[derive(Serialize)]
+    struct Sample {
+        name: String,
+        count: u32,
+        flag: bool,
+    }
+
+    #[test]
+    fn to_value_renders_struct_as_json_object() {
+        let v = to_value(Sample {
+            name: "alpine".into(),
+            count: 3,
+            flag: true,
+        });
+        assert_eq!(v["name"], json!("alpine"));
+        assert_eq!(v["count"], json!(3));
+        assert_eq!(v["flag"], json!(true));
+    }
+
+    #[test]
+    fn to_value_handles_string_and_primitives() {
+        assert_eq!(to_value("hello"), json!("hello"));
+        assert_eq!(to_value(42_u64), json!(42));
+        assert_eq!(to_value(true), json!(true));
+        assert_eq!(to_value(()), json!(null));
+    }
+
+    #[test]
+    fn to_value_handles_vec_and_option() {
+        assert_eq!(to_value(vec!["a", "b"]), json!(["a", "b"]));
+        let none: Option<u32> = None;
+        assert_eq!(to_value(none), json!(null));
+        assert_eq!(to_value(Some(7_u32)), json!(7));
+    }
+
+    /// A type that always fails to serialize — `to_value` must return
+    /// `Value::Null` rather than panicking (used in op handlers where
+    /// the docker response shape may include unknown variants).
+    struct BadSerialize;
+    impl Serialize for BadSerialize {
+        fn serialize<S: serde::Serializer>(&self, _s: S) -> std::result::Result<S::Ok, S::Error> {
+            Err(serde::ser::Error::custom("nope"))
+        }
+    }
+
+    #[test]
+    fn to_value_returns_null_on_serialize_error() {
+        assert_eq!(to_value(BadSerialize), Value::Null);
+    }
+
+    /// Helper extracted from `op_create` for testing:
+    /// strip a JSON Value array down to a Vec<String> of its string elements.
+    fn string_vec_from_value(v: &Value) -> Option<Vec<String>> {
+        v.as_array().map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
+    }
+
+    #[test]
+    fn string_vec_helper_matches_op_create_pattern() {
+        // Same shape `op_create` uses to coerce `opts["cmd"]` / `opts["env"]`.
+        let v = json!(["sh", "-c", "echo hi", 42, null, "tail"]);
+        assert_eq!(
+            string_vec_from_value(&v),
+            Some(vec![
+                "sh".into(),
+                "-c".into(),
+                "echo hi".into(),
+                "tail".into()
+            ])
+        );
+        assert_eq!(string_vec_from_value(&json!("not-array")), None);
+        assert_eq!(string_vec_from_value(&json!([])), Some(vec![]));
+    }
+}
