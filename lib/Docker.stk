@@ -1,20 +1,20 @@
-# lib/Docker.stk — Docker client for stryke (`use Docker`).
-#
-# Thin wrapper around the `stryke-docker` cdylib's `docker__*` exports.
-# The cdylib is dlopened in-process on first `use Docker` (see stryke's
-# `pkg/commands.rs::try_load_ffi_for`) and registers each export as a
-# stryke-callable function via `rust_ffi::load_cdylib`.
-#
-# Replaces the v1 helper-binary model (fork(2) + exec(2) + fresh dockerd
-# HTTP connection per call). The cdylib holds:
-#   * one shared tokio runtime
-#   * a bollard::Docker client cache keyed by DOCKER_HOST
-# Back-to-back calls reuse the same client + underlying HTTP pool.
-#
-# v0.2.0 surface: the core 24 ops (containers, images, networks,
-# volumes, exec, logs, prune). Streaming-only ops (events, stats,
-# logs --follow, build, push) are deferred — they need a callback FFI
-# shape that v1's `FfiSig::StrToStr` doesn't model.
+## lib/Docker.stk — Docker client for stryke (`use Docker`).
+##
+## Thin wrapper around the `stryke-docker` cdylib's `docker__*` exports.
+## The cdylib is dlopened in-process on first `use Docker` (see stryke's
+## `pkg/commands.rs::try_load_ffi_for`) and registers each export as a
+## stryke-callable function via `rust_ffi::load_cdylib`.
+##
+## Replaces the v1 helper-binary model (fork(2) + exec(2) + fresh dockerd
+## HTTP connection per call). The cdylib holds:
+##   * one shared tokio runtime
+##   * a bollard::Docker client cache keyed by DOCKER_HOST
+## Back-to-back calls reuse the same client + underlying HTTP pool.
+##
+## v0.2.0 surface: the core 24 ops (containers, images, networks,
+## volumes, exec, logs, prune). Streaming-only ops (events, stats,
+## logs --follow, build, push) are deferred — they need a callback FFI
+## shape that v1's `FfiSig::StrToStr` doesn't model.
 
 package Docker
 
@@ -66,7 +66,7 @@ fn Docker::inspect ($container, %opts) {
         docker__inspect(to_json(Docker::_req({ container => $container }, \%opts))))
 }
 
-# Create then optionally start. Pass `start => 1` to start after create.
+## Create then optionally start. Pass `start => 1` to start after create.
 fn Docker::create ($image, %opts) {
     my $r = Docker::_req(
         { image => $image, name => $opts{name}, cmd => $opts{cmd}, env => $opts{env} },
@@ -79,7 +79,7 @@ fn Docker::create ($image, %opts) {
     $created
 }
 
-# Run: create + start in one shot.
+## Run: create + start in one shot.
 fn Docker::run ($image, %opts) {
     $opts{start} = 1
     Docker::create($image, %opts)
@@ -122,8 +122,8 @@ fn Docker::logs ($container, %opts) {
     Docker::_decode("logs", docker__logs(to_json($r)))->{logs}
 }
 
-# Logs-follow is a streaming op — deferred from v0.2.0 (needs a callback
-# FFI shape). Fall back to `Docker::logs` for snapshot reads.
+## Logs-follow is a streaming op — deferred from v0.2.0 (needs a callback
+## FFI shape). Fall back to `Docker::logs` for snapshot reads.
 fn Docker::logs_follow ($container, %opts) {
     die "Docker::logs_follow: streaming ops are deferred in v0.2.0 cdylib — use `Docker::logs` for snapshot reads"
 }
