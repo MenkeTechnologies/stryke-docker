@@ -9,7 +9,7 @@ help:
 	  '  make release   - cargo build --release' \
 	  '  make debug     - cargo build' \
 	  '  make test      - cargo test then `s test t/`  (needs reachable Docker daemon)' \
-	  '  make install   - `s pkg install -g .` (registers dock/dock-build CLI launchers)' \
+	  '  make install   - `s pkg install -g .` (cdylib lands in ~/.stryke/store/docker@<ver>/)' \
 	  '  make clean     - cargo clean'
 
 release:

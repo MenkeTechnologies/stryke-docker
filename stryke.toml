@@ -1,15 +1,42 @@
 [package]
 name = "docker"
-version = "0.1.0"
-description = "Docker client for stryke. Containers + images + networks + volumes + build + logs + exec + events against the local daemon or any DOCKER_HOST."
+version = "0.2.0"
+description = "Docker client for stryke. Containers + images + networks + volumes against the local daemon or any DOCKER_HOST. cdylib loaded in-process — persistent bollard::Docker client + tokio runtime across calls."
 authors = ["MenkeTechnologies"]
 license = "MIT"
 repository = "https://github.com/MenkeTechnologies/stryke-docker"
 edition = "2026"
 
-[bin]
-dock = "bin/dock.stk"
-dock-build = "bin/dock-build.stk"
+[ffi]
+lib-name = "stryke_docker"
+namespace = "Docker"
+exports = [
+    "docker__pkg_version",
+    "docker__version",
+    "docker__ping",
+    "docker__info",
+    "docker__ps",
+    "docker__inspect",
+    "docker__create",
+    "docker__start",
+    "docker__stop",
+    "docker__restart",
+    "docker__kill",
+    "docker__rm",
+    "docker__logs",
+    "docker__exec",
+    "docker__images",
+    "docker__pull",
+    "docker__rmi",
+    "docker__tag",
+    "docker__networks",
+    "docker__network_create",
+    "docker__network_rm",
+    "docker__volumes",
+    "docker__volume_create",
+    "docker__volume_rm",
+    "docker__prune",
+]
 
 [scripts]
 build = "cargo build --release"

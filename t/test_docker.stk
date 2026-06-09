@@ -1,21 +1,21 @@
 # t/test_docker.stk — round-trip against a live Docker daemon.
 #
-# Skips when the helper isn't built or no daemon is reachable. Local:
-#   open -a Docker     (macOS Desktop)
-#   sudo systemctl start docker     (Linux)
+# Requires the cdylib to be loaded. Install once with `s pkg install -g .`
+# from the package root so stryke's FFI bridge dlopens
+# lib/libstryke_docker.{dylib,so} on `use Docker`.
 #
 # Pulls busybox:latest, runs a one-shot container, asserts output via exec.
 
-require "./lib/Docker.stk"
+use Docker
 
-my $have_helper = eval { Docker::helper_path(); 1 }
-unless ($have_helper) {
-    p "1..0 # SKIP helper not built — run `cargo build --release` first"
+my $have_cdylib = eval { Docker::pkg_version(); 1 }
+unless ($have_cdylib) {
+    p "1..0 # SKIP cdylib not loaded — run `s pkg install -g .` first"
     exit 0
 }
 
-unless (Docker::ping()) {
-    p "1..0 # SKIP no reachable Docker daemon (check $ENV{DOCKER_HOST})"
+unless (eval { Docker::ping() }) {
+    p "1..0 # SKIP no reachable Docker daemon (check \$DOCKER_HOST)"
     exit 0
 }
 

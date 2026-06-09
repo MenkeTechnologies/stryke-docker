@@ -1,31 +1,28 @@
 [package]
-name = "stryke-docker-helper"
-version = "0.1.1"
+name = "stryke-docker"
+version = "0.2.0"
 edition = "2021"
-description = "Docker bridge binary for the stryke `docker` package"
+description = "Docker cdylib for the stryke `docker` package — dlopened in-process via stryke's FFI bridge, with a persistent tokio runtime + bollard::Docker client per DOCKER_HOST."
 authors = ["MenkeTechnologies"]
 license = "MIT"
 repository = "https://github.com/MenkeTechnologies/stryke-docker"
 homepage = "https://menketechnologies.github.io/stryke-docker/"
 publish = false
 
-[[bin]]
-name = "stryke-docker-helper"
-path = "src/main.rs"
+[lib]
+name = "stryke_docker"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
 
 [dependencies]
 bollard = { version = "0.17", default-features = false, features = ["ssl"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util", "signal", "fs"] }
 futures-util = "0.3"
-clap = { version = "4", default-features = false, features = [
-    "std", "derive", "help", "usage", "error-context", "env",
-] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 anyhow = "1"
-tar = "0.4"
-flate2 = "1"
-walkdir = "2"
+once_cell = "1"
+parking_lot = "0.12"
 
 [profile.release]
 opt-level = 3

@@ -45,6 +45,14 @@ TLS-wrapped). Opt-in package tier.
 
 ## [0x00] Install
 
+From a release (no rustc on the consumer machine):
+
+```sh
+s pkg install -g github.com/MenkeTechnologies/stryke-docker
+```
+
+From a local checkout:
+
 ```sh
 cd ~/projects/stryke-docker
 cargo build --release
@@ -56,6 +64,11 @@ Or:
 ```sh
 make install
 ```
+
+The cdylib is dlopened in-process on first `use Docker`. A shared tokio
+runtime + persistent `bollard::Docker` client is held in `OnceCell` for
+the life of the process — no fork-per-call, no fresh HTTP connection
+each time.
 
 ## [0x01] Quick start
 
@@ -250,25 +263,28 @@ Docker::prune  %opts → \%report
     # opts: containers, images, volumes, networks, all
 ```
 
-## [0x04] Helper protocol
+## [0x04] FFI layer
 
-```sh
-stryke-docker-helper ping
-stryke-docker-helper ps --all --filter label=app=web
-stryke-docker-helper run busybox:latest --cmd sh -- -c "echo hi"
-stryke-docker-helper logs web --follow --timestamps
-stryke-docker-helper build ./app --tag my/app:latest --pull
-stryke-docker-helper exec web --cmd sh -- -c "uptime"
-stryke-docker-helper events --filter event=die
-```
+Each `Docker::*` wrapper builds a JSON args dict and calls a sibling
+`docker__*` symbol resolved out of `libstryke_docker.{dylib,so}`. The
+cdylib is dlopened in-process on first `use Docker` (via stryke's
+`pkg::commands::try_load_ffi_for` resolver hook) and exposes 25 entry
+points covering containers, images, networks, volumes, exec, logs, and
+prune.
 
-Output:
+**Persistent state:**
 
-* streams: `ps`, `images`, `logs --follow`, `events`, `pull`, `push`,
-  `build`, `exec`, `networks`, `volumes`, `stats --stream` → NDJSON
-* `logs` (buffered) → raw text
-* everything else → single JSON
-* errors → stderr + non-zero exit
+* `RUNTIME` — one shared `tokio` multi-thread runtime drives every
+  async call.
+* `CLIENTS` — `bollard::Docker` cache keyed by `DOCKER_HOST` (socket
+  path / tcp url). The v1 helper opened a fresh dockerd connection per
+  fork; this reuses the same client + underlying HTTP pool across
+  calls.
+
+**Deferred from v0.2.0:** streaming-only ops (`events`, `stats`,
+`logs --follow`, `build`, `push`). These need a callback FFI shape that
+v1's `FfiSig::StrToStr` doesn't model. Calling them dies with a clear
+message.
 
 ## [0x05] Tests
 

@@ -63,51 +63,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked --no-fail-fast
 
-  helper-live-docker:
-    name: Helper end-to-end (live daemon)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
-      - run: cargo build --release --locked
-
-      - name: ping + pull + run + exec + cleanup
-        run: |
-          set -euo pipefail
-          H=./target/release/stryke-docker-helper
-
-          $H ping | jq -e '.ok == true'
-          $H version | jq -e '.Version'
-
-          $H pull busybox:latest > /tmp/pull.ndjson
-          test -s /tmp/pull.ndjson
-
-          ID=$($H run busybox:latest --name=ci-busy --cmd sh -c "sleep 30" \
-                 | jq -er '.id')
-          echo "id=$ID"
-
-          $H ps --all --filter status=running | grep -q ci-busy
-
-          $H inspect ci-busy | jq -e '.State.Running == true'
-
-          $H exec ci-busy --cmd sh -c "echo hi" \
-            | grep -q '"data":"hi'
-
-          $H stats ci-busy | jq -e '.read'
-
-          $H network-create ci-net --driver bridge | jq -e '.Id'
-          $H networks | grep -q ci-net
-          $H network-rm ci-net | jq -e '.removed == true'
-
-          $H volume-create ci-vol | jq -e '.Name == "ci-vol"'
-          $H volumes | grep -q ci-vol
-          $H volume-rm ci-vol | jq -e '.removed == true'
-
-          $H stop ci-busy --time 0 | jq -e '.stopped == true'
-          $H rm ci-busy --force | jq -e '.removed == true'
-
   doc:
     name: Doc
     runs-on: ubuntu-latest
@@ -121,7 +76,7 @@ jobs:
 
   release-build:
     name: Release Build (${{ matrix.target }})
-    needs: [check, test, helper-live-docker]
+    needs: [check, test]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -143,7 +98,7 @@ jobs:
       - uses: actions/upload-artifact@v6
         with:
           name: stryke-docker-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/stryke-docker-helper
+          path: target/${{ matrix.target }}/release/libstryke_docker.*
 
   docs-gates:
     name: Docs gates

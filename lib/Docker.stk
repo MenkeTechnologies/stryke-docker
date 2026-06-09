@@ -1,564 +1,220 @@
-# lib/Docker.stk — Docker client for stryke.
+# lib/Docker.stk — Docker client for stryke (`use Docker`).
 #
-# Wraps the `stryke-docker-helper` Rust binary (bollard async client).
-# Output is NDJSON for streams (ps, images, logs --follow, build,
-# pull, push, events, exec, stats) and single JSON otherwise.
+# Thin wrapper around the `stryke-docker` cdylib's `docker__*` exports.
+# The cdylib is dlopened in-process on first `use Docker` (see stryke's
+# `pkg/commands.rs::try_load_ffi_for`) and registers each export as a
+# stryke-callable function via `rust_ffi::load_cdylib`.
 #
-# Connection: $DOCKER_HOST (unix:// or tcp://) or the local default
-# socket at /var/run/docker.sock. Override per-call via %opts{host}.
+# Replaces the v1 helper-binary model (fork(2) + exec(2) + fresh dockerd
+# HTTP connection per call). The cdylib holds:
+#   * one shared tokio runtime
+#   * a bollard::Docker client cache keyed by DOCKER_HOST
+# Back-to-back calls reuse the same client + underlying HTTP pool.
+#
+# v0.2.0 surface: the core 24 ops (containers, images, networks,
+# volumes, exec, logs, prune). Streaming-only ops (events, stats,
+# logs --follow, build, push) are deferred — they need a callback FFI
+# shape that v1's `FfiSig::StrToStr` doesn't model.
 
 package Docker
 
-our $HELPER
+# ── error dispatch ────────────────────────────────────────────────────
 
-fn Docker::pkg_root {
-    my @parts = split "/", __FILE__
-    pop @parts
-    pop @parts
-    my $root = join "/", @parts
-    $root ne "" ? $root : "."
-}
-
-fn Docker::helper_path {
-    return $Docker::HELPER if defined $Docker::HELPER && -x $Docker::HELPER
-
-    if (exists $ENV{STRYKE_DOCKER_HELPER} && $ENV{STRYKE_DOCKER_HELPER} ne "") {
-        my $p = $ENV{STRYKE_DOCKER_HELPER}
-        die "stryke-docker: STRYKE_DOCKER_HELPER=$p is not an executable file" unless -x $p
-        $Docker::HELPER = $p
-        return $p
+fn Docker::_decode ($name, $json) {
+    my $o = from_json $json
+    if (ref $o eq "HASH" && exists $o->{error}) {
+        die "Docker::$name: $o->{error}"
     }
-
-    my $root = Docker::pkg_root()
-    for my $cand (
-        "$root/target/release/stryke-docker-helper",
-        "$root/target/debug/stryke-docker-helper",
-        "$root/bin/stryke-docker-helper",
-    ) {
-        if (-x $cand) {
-            $Docker::HELPER = $cand
-            return $cand
-        }
-    }
-
-    my $which = qx{command -v stryke-docker-helper 2>/dev/null}
-    chomp $which
-    if ($which ne "" && -x $which) {
-        $Docker::HELPER = $which
-        return $which
-    }
-
-    die "stryke-docker: helper binary not found.\n" .
-        "  Build it once with:  cd $root && cargo build --release\n" .
-        "  Or set STRYKE_DOCKER_HELPER=/path/to/stryke-docker-helper\n"
+    $o
 }
 
-fn Docker::ensure_built {
-    my $root = Docker::pkg_root()
-    for my $cand ("$root/target/release/stryke-docker-helper",
-                  "$root/target/debug/stryke-docker-helper") {
-        return $cand if -x $cand
-    }
-    return Docker::helper_path() if exists $ENV{STRYKE_DOCKER_HELPER}
-
-    p "stryke-docker: building helper (cargo build --release)..."
-    my $rc = system "cd " . Docker::_shq($root) . " && cargo build --release"
-    die "stryke-docker: cargo build failed (rc=$rc)" if $rc != 0
-    Docker::helper_path()
+fn Docker::_req ($extra, $opts) {
+    my %r = %$extra
+    $r{host} = $opts->{host} if exists $opts->{host} && defined $opts->{host}
+    \%r
 }
 
-fn Docker::_shq ($s) {
-    my $t = $s
-    $t =~ s/'/'\\''/g
-    "'$t'"
-}
-
-fn Docker::_conn_argv ($o) {
-    my @argv = (Docker::_shq(Docker::helper_path()))
-    push @argv, "--host",    Docker::_shq($o->{host})    if defined $o->{host}
-    push @argv, "--timeout", Docker::_shq($o->{timeout}) if defined $o->{timeout}
-    @argv
-}
-
-fn Docker::_drain_ndjson ($fh) {
-    my @rows
-    while (my $line = <$fh>) {
-        chomp $line
-        next if $line eq ""
-        push @rows, from_json $line
-    }
-    @rows
-}
-
-fn Docker::_run_ndjson ($argv) {
-    my $cmd = join " ", @$argv
-    if ($ENV{STRYKE_DOCKER_DEBUG}) {
-        warn "DEBUG docker cmd: $cmd\n"
-    }
-    open my $fh, "-|", $cmd or die "stryke-docker: spawn failed: $!"
-    my @rows = Docker::_drain_ndjson $fh
-    close $fh or die "stryke-docker: helper exited ($?)"
-    @rows
-}
-
-fn Docker::_run_json ($argv) {
-    my $cmd = join " ", @$argv
-    if ($ENV{STRYKE_DOCKER_DEBUG}) {
-        warn "DEBUG docker cmd: $cmd\n"
-    }
-    my $out = qx{$cmd}
-    die "stryke-docker: helper exited ($?)" if $? != 0
-    from_json $out
-}
-
-fn Docker::_run_raw ($argv) {
-    my $cmd = join " ", @$argv
-    if ($ENV{STRYKE_DOCKER_DEBUG}) {
-        warn "DEBUG docker cmd: $cmd\n"
-    }
-    my $out = qx{$cmd}
-    die "stryke-docker: helper exited ($?)" if $? != 0
-    $out
-}
-
-# ---------------------------------------------------------------------------
-# Daemon
-# ---------------------------------------------------------------------------
-
-fn Docker::ping (%opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "ping"
-    my $cmd = join " ", @argv
-    my $out = qx{$cmd 2>/dev/null}
-    $? == 0 && $out =~ /"ok":\s*true/
-}
+# ── version + ping ──────────────────────────────────────────────────
 
 fn Docker::version (%opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "version"
-    Docker::_run_json(\@argv)
+    Docker::_decode("version", docker__version(to_json(Docker::_req({}, \%opts))))
+}
+
+fn Docker::pkg_version {
+    Docker::_decode("pkg_version", docker__pkg_version("{}"))->{version}
+}
+
+fn Docker::ping (%opts) {
+    my $o = Docker::_decode("ping", docker__ping(to_json(Docker::_req({}, \%opts))))
+    lc($o->{value} // "") eq "ok"
 }
 
 fn Docker::info (%opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "info"
-    Docker::_run_json(\@argv)
+    Docker::_decode("info", docker__info(to_json(Docker::_req({}, \%opts))))
 }
 
-# Streaming events. callback => sub ($evt) { … } per event.
-fn Docker::events (%opts) {
-    die "Docker::events: callback => sub { … } required" unless defined $opts{callback}
-    my $cb = $opts{callback}
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "events"
-    push @argv, "--since", Docker::_shq($opts{since}) if defined $opts{since}
-    push @argv, "--until", Docker::_shq($opts{until}) if defined $opts{until}
-    if (defined $opts{filters}) {
-        for my $k (keys %{$opts{filters}}) {
-            for my $v (@{ $opts{filters}{$k} }) {
-                push @argv, "--filter", Docker::_shq("$k=$v")
-            }
-        }
-    }
-    my $cmd = join " ", @argv
-    my $n = 0
-    open my $fh, "-|", $cmd or die "Docker::events: spawn failed: $!"
-    while (my $line = <$fh>) {
-        chomp $line
-        next if $line eq ""
-        $cb->(from_json $line)
-        $n++
-    }
-    close $fh or die "Docker::events: helper exited ($?)"
-    $n
-}
-
-# ---------------------------------------------------------------------------
-# Containers
-# ---------------------------------------------------------------------------
+# ── containers ───────────────────────────────────────────────────────
 
 fn Docker::ps (%opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "ps"
-    push @argv, "--all"                                if $opts{all}
-    push @argv, "--size"                               if $opts{size}
-    push @argv, "--limit", Docker::_shq($opts{limit})  if defined $opts{limit}
-    if (defined $opts{filters}) {
-        for my $k (keys %{$opts{filters}}) {
-            for my $v (@{ $opts{filters}{$k} }) {
-                push @argv, "--filter", Docker::_shq("$k=$v")
-            }
-        }
-    }
-    Docker::_run_ndjson(\@argv)
+    my $r = Docker::_req({ all => ($opts{all} ? \1 : \0) }, \%opts)
+    my $o = Docker::_decode("ps", docker__ps(to_json($r)))
+    @{ $o->{containers} }
 }
 
 fn Docker::inspect ($container, %opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "inspect", Docker::_shq($container)
-    Docker::_run_json(\@argv)
+    Docker::_decode("inspect",
+        docker__inspect(to_json(Docker::_req({ container => $container }, \%opts))))
 }
 
-# Run an image. %opts:
-#   name, cmd (arrayref), env (arrayref of "K=V"), port (arrayref of "host:container[/proto]"),
-#   volume (arrayref), label (arrayref), network, workdir, user, hostname, restart, rm, tty, detach
-fn Docker::run ($image, %opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "run", Docker::_shq($image)
-    push @argv, "--name",     Docker::_shq($opts{name})     if defined $opts{name}
-    push @argv, "--network",  Docker::_shq($opts{network})  if defined $opts{network}
-    push @argv, "--workdir",  Docker::_shq($opts{workdir})  if defined $opts{workdir}
-    push @argv, "--user",     Docker::_shq($opts{user})     if defined $opts{user}
-    push @argv, "--hostname", Docker::_shq($opts{hostname}) if defined $opts{hostname}
-    push @argv, "--restart",  Docker::_shq($opts{restart})  if defined $opts{restart}
-    push @argv, "--rm"                                       if $opts{rm}
-    push @argv, "--tty"                                      if $opts{tty}
-    for my $e (@{ $opts{env}    // [] }) { push @argv, "--env",    Docker::_shq($e) }
-    for my $p (@{ $opts{port}   // [] }) { push @argv, "--port",   Docker::_shq($p) }
-    for my $v (@{ $opts{volume} // [] }) { push @argv, "--volume", Docker::_shq($v) }
-    for my $l (@{ $opts{label}  // [] }) { push @argv, "--label",  Docker::_shq($l) }
-    if (defined $opts{cmd} && @{$opts{cmd}}) {
-        push @argv, "--cmd"
-        push @argv, Docker::_shq($_) for @{$opts{cmd}}
-    }
-    Docker::_run_json(\@argv)
-}
-
+# Create then optionally start. Pass `start => 1` to start after create.
 fn Docker::create ($image, %opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "create", Docker::_shq($image)
-    push @argv, "--name",     Docker::_shq($opts{name})     if defined $opts{name}
-    push @argv, "--network",  Docker::_shq($opts{network})  if defined $opts{network}
-    push @argv, "--workdir",  Docker::_shq($opts{workdir})  if defined $opts{workdir}
-    push @argv, "--user",     Docker::_shq($opts{user})     if defined $opts{user}
-    push @argv, "--hostname", Docker::_shq($opts{hostname}) if defined $opts{hostname}
-    push @argv, "--restart",  Docker::_shq($opts{restart})  if defined $opts{restart}
-    push @argv, "--tty"                                      if $opts{tty}
-    for my $e (@{ $opts{env}    // [] }) { push @argv, "--env",    Docker::_shq($e) }
-    for my $p (@{ $opts{port}   // [] }) { push @argv, "--port",   Docker::_shq($p) }
-    for my $v (@{ $opts{volume} // [] }) { push @argv, "--volume", Docker::_shq($v) }
-    for my $l (@{ $opts{label}  // [] }) { push @argv, "--label",  Docker::_shq($l) }
-    if (defined $opts{cmd} && @{$opts{cmd}}) {
-        push @argv, "--cmd"
-        push @argv, Docker::_shq($_) for @{$opts{cmd}}
+    my $r = Docker::_req(
+        { image => $image, name => $opts{name}, cmd => $opts{cmd}, env => $opts{env} },
+        \%opts
+    )
+    my $created = Docker::_decode("create", docker__create(to_json($r)))
+    if ($opts{start}) {
+        Docker::start($created->{Id}, %opts)
     }
-    Docker::_run_json(\@argv)
+    $created
+}
+
+# Run: create + start in one shot.
+fn Docker::run ($image, %opts) {
+    $opts{start} = 1
+    Docker::create($image, %opts)
 }
 
 fn Docker::start ($container, %opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "start", Docker::_shq($container)
-    Docker::_run_json(\@argv)
+    Docker::_decode("start",
+        docker__start(to_json(Docker::_req({ container => $container }, \%opts))))->{ok} ? 1 : 0
 }
 
 fn Docker::stop ($container, %opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "stop", Docker::_shq($container)
-    push @argv, "--time", Docker::_shq($opts{time}) if defined $opts{time}
-    Docker::_run_json(\@argv)
+    Docker::_decode("stop",
+        docker__stop(to_json(Docker::_req({ container => $container, timeout => $opts{timeout} }, \%opts))))->{ok} ? 1 : 0
 }
 
 fn Docker::restart ($container, %opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "restart", Docker::_shq($container)
-    push @argv, "--time", Docker::_shq($opts{time}) if defined $opts{time}
-    Docker::_run_json(\@argv)
+    Docker::_decode("restart",
+        docker__restart(to_json(Docker::_req({ container => $container }, \%opts))))->{ok} ? 1 : 0
 }
 
 fn Docker::kill ($container, %opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "kill", Docker::_shq($container)
-    push @argv, "--signal", Docker::_shq($opts{signal}) if defined $opts{signal}
-    Docker::_run_json(\@argv)
+    Docker::_decode("kill",
+        docker__kill(to_json(Docker::_req({ container => $container, signal => $opts{signal} }, \%opts))))->{ok} ? 1 : 0
 }
 
 fn Docker::rm ($container, %opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "rm", Docker::_shq($container)
-    push @argv, "--force"   if $opts{force}
-    push @argv, "--volumes" if $opts{volumes}
-    Docker::_run_json(\@argv)
+    my $r = Docker::_req(
+        { container => $container,
+          force => ($opts{force} ? \1 : \0),
+          volumes => ($opts{volumes} ? \1 : \0) },
+        \%opts
+    )
+    Docker::_decode("rm", docker__rm(to_json($r)))->{ok} ? 1 : 0
 }
 
-# Buffered logs (raw text). %opts: tail, since, until, timestamps, stdout, stderr
+# ── logs + exec ──────────────────────────────────────────────────────
+
 fn Docker::logs ($container, %opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "logs", Docker::_shq($container)
-    push @argv, "--tail",       Docker::_shq($opts{tail})  if defined $opts{tail}
-    push @argv, "--since",      Docker::_shq($opts{since}) if defined $opts{since}
-    push @argv, "--until",      Docker::_shq($opts{until}) if defined $opts{until}
-    push @argv, "--timestamps"                              if $opts{timestamps}
-    Docker::_run_raw(\@argv)
+    my $r = Docker::_req({ container => $container, tail => $opts{tail} }, \%opts)
+    Docker::_decode("logs", docker__logs(to_json($r)))->{logs}
 }
 
-# Streaming logs. callback => sub ($stream, $data) { … }. Returns chunk count.
+# Logs-follow is a streaming op — deferred from v0.2.0 (needs a callback
+# FFI shape). Fall back to `Docker::logs` for snapshot reads.
 fn Docker::logs_follow ($container, %opts) {
-    die "Docker::logs_follow: callback => sub { … } required" unless defined $opts{callback}
-    my $cb = $opts{callback}
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "logs", Docker::_shq($container), "--follow"
-    push @argv, "--tail",       Docker::_shq($opts{tail})  if defined $opts{tail}
-    push @argv, "--since",      Docker::_shq($opts{since}) if defined $opts{since}
-    push @argv, "--timestamps"                              if $opts{timestamps}
-    my $cmd = join " ", @argv
-    my $n = 0
-    open my $fh, "-|", $cmd or die "Docker::logs_follow: spawn failed: $!"
-    while (my $line = <$fh>) {
-        chomp $line
-        next if $line eq ""
-        my $o = from_json $line
-        $cb->($o->{stream}, $o->{data})
-        $n++
-    }
-    close $fh or die "Docker::logs_follow: helper exited ($?)"
-    $n
+    die "Docker::logs_follow: streaming ops are deferred in v0.2.0 cdylib — use `Docker::logs` for snapshot reads"
 }
 
-# Exec. $cmd is arrayref. callback => sub ($stream, $data) { … }; trailing
-# {exit_code} event delivered last.
 fn Docker::exec ($container, $cmd, %opts) {
-    die "Docker::exec: cmd must be an arrayref"        unless ref($cmd) eq "ARRAY"
-    die "Docker::exec: callback => sub { … } required" unless defined $opts{callback}
-    my $cb = $opts{callback}
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "exec", Docker::_shq($container)
-    push @argv, "--workdir", Docker::_shq($opts{workdir}) if defined $opts{workdir}
-    push @argv, "--user",    Docker::_shq($opts{user})    if defined $opts{user}
-    push @argv, "--tty"                                    if $opts{tty}
-    for my $e (@{ $opts{env} // [] }) { push @argv, "--env", Docker::_shq($e) }
-    push @argv, "--cmd"
-    push @argv, Docker::_shq($_) for @$cmd
-    my $shcmd = join " ", @argv
-    my $n = 0
-    my $exit
-    open my $fh, "-|", $shcmd or die "Docker::exec: spawn failed: $!"
-    while (my $line = <$fh>) {
-        chomp $line
-        next if $line eq ""
-        my $o = from_json $line
-        if (defined $o->{exit_code}) {
-            $exit = $o->{exit_code}
-        } else {
-            $cb->($o->{stream}, $o->{data})
-            $n++
-        }
-    }
-    close $fh or die "Docker::exec: helper exited ($?)"
-    { chunks => $n, exit_code => $exit }
+    die "Docker::exec: cmd must be arrayref" unless ref($cmd) eq "ARRAY"
+    my $r = Docker::_req({ container => $container, cmd => $cmd }, \%opts)
+    Docker::_decode("exec", docker__exec(to_json($r)))->{output}
 }
 
-# One snapshot of stats (set stream => 1 + callback for live stream).
-fn Docker::stats ($container, %opts) {
-    if ($opts{stream}) {
-        die "Docker::stats: callback => sub { … } required for stream" unless defined $opts{callback}
-        my $cb = $opts{callback}
-        my @argv = Docker::_conn_argv(\%opts)
-        push @argv, "stats", Docker::_shq($container), "--stream"
-        my $shcmd = join " ", @argv
-        my $n = 0
-        open my $fh, "-|", $shcmd or die "Docker::stats: spawn failed: $!"
-        while (my $line = <$fh>) {
-            chomp $line
-            next if $line eq ""
-            $cb->(from_json $line)
-            $n++
-        }
-        close $fh or die "Docker::stats: helper exited ($?)"
-        return $n
-    }
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "stats", Docker::_shq($container)
-    my @rows = Docker::_run_ndjson(\@argv)
-    @rows ? $rows[0] : undef
-}
-
-# ---------------------------------------------------------------------------
-# Images
-# ---------------------------------------------------------------------------
+# ── images ──────────────────────────────────────────────────────────
 
 fn Docker::images (%opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "images"
-    push @argv, "--all" if $opts{all}
-    if (defined $opts{filters}) {
-        for my $k (keys %{$opts{filters}}) {
-            for my $v (@{ $opts{filters}{$k} }) {
-                push @argv, "--filter", Docker::_shq("$k=$v")
-            }
-        }
-    }
-    Docker::_run_ndjson(\@argv)
+    my $r = Docker::_req({ all => ($opts{all} ? \1 : \0) }, \%opts)
+    my $o = Docker::_decode("images", docker__images(to_json($r)))
+    @{ $o->{images} }
 }
 
-# Pull. callback => sub ($evt) { … } per progress event (optional).
 fn Docker::pull ($image, %opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "pull", Docker::_shq($image)
-    push @argv, "--platform", Docker::_shq($opts{platform}) if defined $opts{platform}
-    if (defined $opts{callback}) {
-        my $cb = $opts{callback}
-        my $shcmd = join " ", @argv
-        my $n = 0
-        open my $fh, "-|", $shcmd or die "Docker::pull: spawn failed: $!"
-        while (my $line = <$fh>) {
-            chomp $line
-            next if $line eq ""
-            $cb->(from_json $line)
-            $n++
-        }
-        close $fh or die "Docker::pull: helper exited ($?)"
-        return $n
-    }
-    Docker::_run_ndjson(\@argv)
+    Docker::_decode("pull",
+        docker__pull(to_json(Docker::_req({ image => $image }, \%opts))))
 }
 
 fn Docker::push ($image, %opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "push", Docker::_shq($image)
-    if (defined $opts{callback}) {
-        my $cb = $opts{callback}
-        my $shcmd = join " ", @argv
-        my $n = 0
-        open my $fh, "-|", $shcmd or die "Docker::push: spawn failed: $!"
-        while (my $line = <$fh>) {
-            chomp $line
-            next if $line eq ""
-            $cb->(from_json $line)
-            $n++
-        }
-        close $fh or die "Docker::push: helper exited ($?)"
-        return $n
-    }
-    Docker::_run_ndjson(\@argv)
+    die "Docker::push: deferred in v0.2.0 cdylib (registry auth surface needs design)"
 }
 
 fn Docker::rmi ($image, %opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "rmi", Docker::_shq($image)
-    push @argv, "--force"   if $opts{force}
-    push @argv, "--noprune" if $opts{noprune}
-    Docker::_run_json(\@argv)
+    my $r = Docker::_req({ image => $image, force => ($opts{force} ? \1 : \0) }, \%opts)
+    Docker::_decode("rmi", docker__rmi(to_json($r)))->{ok} ? 1 : 0
 }
 
 fn Docker::tag ($source, $target, %opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "tag", Docker::_shq($source), Docker::_shq($target)
-    Docker::_run_json(\@argv)
+    Docker::_decode("tag",
+        docker__tag(to_json(Docker::_req({ source => $source, target => $target }, \%opts))))->{ok} ? 1 : 0
 }
 
-# Build. %opts: tag, dockerfile, build_args (hashref), no_cache, pull, rm, callback
 fn Docker::build ($dir, %opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "build", Docker::_shq($dir)
-    push @argv, "--tag",        Docker::_shq($opts{tag})        if defined $opts{tag}
-    push @argv, "--dockerfile", Docker::_shq($opts{dockerfile}) if defined $opts{dockerfile}
-    push @argv, "--no-cache"                                     if $opts{no_cache}
-    push @argv, "--pull"                                         if $opts{pull}
-    push @argv, "--rm"                                           if $opts{rm}
-    if (defined $opts{build_args}) {
-        for my $k (keys %{$opts{build_args}}) {
-            push @argv, "--build-arg", Docker::_shq("$k=$opts{build_args}{$k}")
-        }
-    }
-    if (defined $opts{callback}) {
-        my $cb = $opts{callback}
-        my $shcmd = join " ", @argv
-        my $n = 0
-        open my $fh, "-|", $shcmd or die "Docker::build: spawn failed: $!"
-        while (my $line = <$fh>) {
-            chomp $line
-            next if $line eq ""
-            $cb->(from_json $line)
-            $n++
-        }
-        close $fh or die "Docker::build: helper exited ($?)"
-        return $n
-    }
-    Docker::_run_ndjson(\@argv)
+    die "Docker::build: deferred in v0.2.0 cdylib (tar+stream surface needs design)"
 }
 
-# ---------------------------------------------------------------------------
-# Networks
-# ---------------------------------------------------------------------------
+# ── networks ────────────────────────────────────────────────────────
 
 fn Docker::networks (%opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "networks"
-    if (defined $opts{filters}) {
-        for my $k (keys %{$opts{filters}}) {
-            for my $v (@{ $opts{filters}{$k} }) {
-                push @argv, "--filter", Docker::_shq("$k=$v")
-            }
-        }
-    }
-    Docker::_run_ndjson(\@argv)
+    my $o = Docker::_decode("networks", docker__networks(to_json(Docker::_req({}, \%opts))))
+    @{ $o->{networks} }
 }
 
 fn Docker::network_create ($name, %opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "network-create", Docker::_shq($name)
-    push @argv, "--driver",  Docker::_shq($opts{driver})  if defined $opts{driver}
-    push @argv, "--subnet",  Docker::_shq($opts{subnet})  if defined $opts{subnet}
-    push @argv, "--gateway", Docker::_shq($opts{gateway}) if defined $opts{gateway}
-    for my $l (@{ $opts{label} // [] }) {
-        push @argv, "--label", Docker::_shq($l)
-    }
-    Docker::_run_json(\@argv)
+    Docker::_decode("network_create",
+        docker__network_create(to_json(Docker::_req({ name => $name, driver => $opts{driver} }, \%opts))))
 }
 
 fn Docker::network_rm ($name, %opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "network-rm", Docker::_shq($name)
-    Docker::_run_json(\@argv)
+    Docker::_decode("network_rm",
+        docker__network_rm(to_json(Docker::_req({ name => $name }, \%opts))))->{ok} ? 1 : 0
 }
 
-# ---------------------------------------------------------------------------
-# Volumes
-# ---------------------------------------------------------------------------
+# ── volumes ─────────────────────────────────────────────────────────
 
 fn Docker::volumes (%opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "volumes"
-    if (defined $opts{filters}) {
-        for my $k (keys %{$opts{filters}}) {
-            for my $v (@{ $opts{filters}{$k} }) {
-                push @argv, "--filter", Docker::_shq("$k=$v")
-            }
-        }
-    }
-    Docker::_run_ndjson(\@argv)
+    my $o = Docker::_decode("volumes", docker__volumes(to_json(Docker::_req({}, \%opts))))
+    $o->{volumes}
 }
 
 fn Docker::volume_create ($name, %opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "volume-create", Docker::_shq($name)
-    push @argv, "--driver", Docker::_shq($opts{driver}) if defined $opts{driver}
-    for my $l (@{ $opts{label} // [] }) {
-        push @argv, "--label", Docker::_shq($l)
-    }
-    Docker::_run_json(\@argv)
+    Docker::_decode("volume_create",
+        docker__volume_create(to_json(Docker::_req({ name => $name }, \%opts))))
 }
 
 fn Docker::volume_rm ($name, %opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "volume-rm", Docker::_shq($name)
-    push @argv, "--force" if $opts{force}
-    Docker::_run_json(\@argv)
+    my $r = Docker::_req({ name => $name, force => ($opts{force} ? \1 : \0) }, \%opts)
+    Docker::_decode("volume_rm", docker__volume_rm(to_json($r)))->{ok} ? 1 : 0
 }
 
-# ---------------------------------------------------------------------------
-# Prune
-# ---------------------------------------------------------------------------
+# ── prune ───────────────────────────────────────────────────────────
 
 fn Docker::prune (%opts) {
-    my @argv = Docker::_conn_argv(\%opts)
-    push @argv, "prune"
-    push @argv, "--containers" if $opts{containers}
-    push @argv, "--images"     if $opts{images}
-    push @argv, "--volumes"    if $opts{volumes}
-    push @argv, "--networks"   if $opts{networks}
-    push @argv, "--all"        if $opts{all}
-    Docker::_run_json(\@argv)
+    my $kind = $opts{kind} // "containers"
+    Docker::_decode("prune",
+        docker__prune(to_json(Docker::_req({ kind => $kind }, \%opts))))
+}
+
+# ── deferred streaming ops ──────────────────────────────────────────
+
+fn Docker::events (%opts) {
+    die "Docker::events: streaming ops are deferred in v0.2.0 cdylib"
+}
+
+fn Docker::stats ($container, %opts) {
+    die "Docker::stats: streaming ops are deferred in v0.2.0 cdylib"
 }
 
 1
