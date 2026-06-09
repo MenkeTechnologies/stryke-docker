@@ -10,7 +10,7 @@ p "version: " . Docker::version()->{Version}
 Docker::pull "nginx:alpine"
 
 # Run an HTTP container in the background.
-my $r = Docker::run "nginx:alpine",
+val $r = Docker::run "nginx:alpine",
     name   => "stryke-nginx",
     port   => ["8080:80/tcp"],
     label  => ["stryke.example=run"],
@@ -18,7 +18,7 @@ my $r = Docker::run "nginx:alpine",
 p "started: $r->{id}"
 
 # Inspect.
-my $info = Docker::inspect "stryke-nginx"
+val $info = Docker::inspect "stryke-nginx"
 p "state: " . $info->{State}{Status}
 p "ip   : " . $info->{NetworkSettings}{IPAddress}
 

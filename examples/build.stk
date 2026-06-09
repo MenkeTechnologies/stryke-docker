@@ -4,12 +4,12 @@
 
 use Docker
 
-my $dir = $ARGV[0] // die "usage: s examples/build.stk DIR [TAG]"
-my $tag = $ARGV[1] // "stryke-build:latest"
+val $dir = $ARGV[0] // die "usage: s examples/build.stk DIR [TAG]"
+val $tag = $ARGV[1] // "stryke-build:latest"
 
 p "building $dir → $tag"
 
-my $n = Docker::build $dir,
+val $n = Docker::build $dir,
     tag        => $tag,
     pull       => 1,
     rm         => 1,

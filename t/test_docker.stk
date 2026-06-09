@@ -8,7 +8,7 @@
 
 use Docker
 
-my $have_cdylib = eval { Docker::pkg_version(); 1 }
+val $have_cdylib = eval { Docker::pkg_version(); 1 }
 unless ($have_cdylib) {
     p "1..0 # SKIP cdylib not loaded — run `s pkg install -g .` first"
     exit 0
@@ -19,29 +19,29 @@ unless (eval { Docker::ping() }) {
     exit 0
 }
 
-my $name = "stryke-test-$$"
-my $vol  = "stryke-test-vol-$$"
-my $net  = "stryke-test-net-$$"
+val $name = "stryke-test-$$"
+val $vol  = "stryke-test-vol-$$"
+val $net  = "stryke-test-net-$$"
 
 p "1..9"
-my $i = 0
+var $i = 0
 
 # 1. version
-my $v
+var $v
 eval { $v = Docker::version() }
 $i++
 p $@ ? "not ok $i - version: $@" :
        (defined $v->{Version} ? "ok $i - version $v->{Version}" : "not ok $i - version shape")
 
 # 2. pull busybox (silent, drains stream)
-my @pull
+var @pull
 eval { @pull = Docker::pull("busybox:latest") }
 $i++
 p $@ ? "not ok $i - pull: $@" :
        (@pull > 0 ? "ok $i - pull busybox (#{len(@pull)} events)" : "not ok $i - pull empty")
 
 # 3. run busybox sleep
-my $r
+var $r
 eval {
     $r = Docker::run "busybox:latest",
         name    => $name,
@@ -54,7 +54,7 @@ p $@ ? "not ok $i - run: $@" :
        (defined $r->{id} ? "ok $i - run ($r->{id})" : "not ok $i - run wrong shape")
 
 # 4. ps filtered by our label includes our container
-my @ps
+var @ps
 eval { @ps = Docker::ps(all => 1, filters => { label => ["stryke.test=1"] }) }
 $i++
 p $@ ? "not ok $i - ps: $@" :
@@ -63,7 +63,7 @@ p $@ ? "not ok $i - ps: $@" :
             : "not ok $i - ps missing $name")
 
 # 5. inspect returns running state
-my $info
+var $info
 eval { $info = Docker::inspect($name) }
 $i++
 p $@ ? "not ok $i - inspect: $@" :
@@ -72,8 +72,8 @@ p $@ ? "not ok $i - inspect: $@" :
             : "not ok $i - inspect: " . to_json($info->{State}))
 
 # 6. exec echoes stdin → stdout
-my @chunks
-my $exec_r
+var @chunks
+var $exec_r
 eval {
     $exec_r = Docker::exec $name, ["sh", "-c", "echo hello-stryke && echo err-line 1>&2"],
         callback => sub ($stream, $data) { push @chunks, [$stream, $data] }
@@ -85,14 +85,14 @@ p $@ ? "not ok $i - exec: $@" :
             : "not ok $i - exec: " . to_json(\@chunks))
 
 # 7. network create + list + rm
-my $nc
+var $nc
 eval { $nc = Docker::network_create($net, driver => "bridge") }
 $i++
 p $@ ? "not ok $i - network-create: $@" :
        (defined $nc->{Id} ? "ok $i - network-create" : "not ok $i - net wrong shape")
 
 # 8. volume create + list + rm
-my $vc
+var $vc
 eval { $vc = Docker::volume_create($vol) }
 $i++
 p $@ ? "not ok $i - volume-create: $@" :
