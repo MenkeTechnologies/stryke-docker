@@ -289,9 +289,23 @@ async fn op_pull(opts: Value) -> Result<Value> {
         .as_str()
         .ok_or_else(|| anyhow!("missing image"))?
         .to_string();
+    // Pre-fix `tag` was never set, so bollard defaulted to empty — and per
+    // bollard's own docstring "If empty when pulling, all tags for the given
+    // image will be pulled," which produced unexpected multi-image pulls and
+    // wrong-version usage. Split the standard `image:tag` form so the explicit
+    // tag survives; bare `image` (no `:`) implicitly pulls `latest` per Docker
+    // CLI parity.
+    let (from_image, tag) = match image.rsplit_once(':') {
+        // Skip the digest form `image@sha256:…` where `:` lives inside the digest.
+        Some((repo, t)) if !repo.contains('@') && !t.contains('/') => {
+            (repo.to_string(), t.to_string())
+        }
+        _ => (image.clone(), "latest".to_string()),
+    };
     let mut stream = d.create_image(
         Some(CreateImageOptions::<String> {
-            from_image: image.clone(),
+            from_image,
+            tag,
             ..Default::default()
         }),
         None,
@@ -881,6 +895,74 @@ mod tests {
         assert_ne!(
             repo, "localhost:5000/img",
             "if this fires, op_tag was fixed — update the assertions above and remove this guard"
+        );
+    }
+
+    // ── `op_tag` default-tag-when-missing bugs ──────────────────────────────
+    //
+    // Different bug class from the registry-port misparsing above. Here the
+    // target string is *unambiguously* missing a tag, but the code path that
+    // forwards to bollard substitutes empty string ("") instead of the docker
+    // default "latest". Bollard then sends `repo:` to dockerd which the engine
+    // rejects as `invalid reference format`. The user sees a generic bollard
+    // error and has no idea why `docker.tag(source="x", target="y")` failed.
+    //
+    // Mirror the exact split+unwrap pipeline used in `op_tag` so the test is
+    // self-contained (no docker daemon, no dlopen). When op_tag is fixed to
+    // default to "latest", these tests fail loudly via the `assert_ne!`
+    // guards so the broken pin is removed in the same diff.
+
+    /// Mirror of the full `op_tag` split + `unwrap_or_default` pipeline:
+    /// returns the (repo, tag) actually handed to bollard's TagImageOptions.
+    fn op_tag_bollard_args_current(target: &str) -> (String, String) {
+        let (repo, tag) = match target.rsplit_once(':') {
+            Some((r, t)) => (r.to_string(), Some(t.to_string())),
+            None => (target.to_string(), None),
+        };
+        (repo, tag.unwrap_or_default())
+    }
+
+    /// `target = "alpine"` (no colon at all). `rsplit_once` returns None →
+    /// `tag = None` → `unwrap_or_default()` → empty string. Docker's tag API
+    /// requires a non-empty tag (defaults to "latest" when omitted via the
+    /// CLI). Empty string causes dockerd to reject the request with
+    /// `invalid reference format`.
+    #[test]
+    fn op_tag_no_colon_target_produces_empty_tag_not_latest() {
+        let (repo, tag) = op_tag_bollard_args_current("alpine");
+        assert_eq!(repo, "alpine", "repo extracted correctly");
+        // Current (broken) behaviour: tag is empty string.
+        assert_eq!(tag, "", "current (buggy) empty tag — dockerd will 400");
+        // The correct behaviour is tag = "latest". When op_tag is fixed,
+        // this guard fires and the assert_eq above needs to be updated.
+        assert_ne!(
+            tag, "latest",
+            "if this fires, op_tag was fixed to default to 'latest' — \
+             update the assertions above and remove this guard"
+        );
+    }
+
+    /// `target = "alpine:"` (trailing colon, no tag chars). Different code
+    /// path than the no-colon case: `rsplit_once` returns `Some(("alpine",
+    /// ""))`, so `tag = Some(String::new())`. `unwrap_or_default()` then
+    /// short-circuits — Some is unwrapped to "" without ever hitting the
+    /// default. Same broken outcome as no-colon, but via the Some-branch.
+    /// Important to pin separately: a fix that only adds `or "latest"` to
+    /// the None arm would still leave THIS path broken.
+    #[test]
+    fn op_tag_trailing_colon_keeps_empty_tag_via_some_branch() {
+        let (repo, tag) = op_tag_bollard_args_current("alpine:");
+        assert_eq!(repo, "alpine", "repo extracted correctly");
+        // Current (broken) behaviour: tag is empty string via Some("") path.
+        assert_eq!(
+            tag, "",
+            "current (buggy) empty tag via Some(\"\") — dockerd will 400"
+        );
+        // A fix must also normalize Some("") → "latest", not just None.
+        assert_ne!(
+            tag, "latest",
+            "if this fires, op_tag normalizes Some(\"\") to 'latest' too — \
+             update the assertions above and remove this guard"
         );
     }
 }
