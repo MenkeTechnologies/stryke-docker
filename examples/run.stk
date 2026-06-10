@@ -4,7 +4,12 @@
 
 use Docker
 
-p "version: " . Docker::version()->{Version}
+val $vinfo = eval { Docker::version() }
+unless (defined $vinfo) {
+    p "docker daemon not reachable — start docker or set DOCKER_HOST to exercise the demo"
+    exit 0
+}
+p "version: " . $vinfo->{Version}
 
 # Pull (drain stream silently).
 Docker::pull("nginx:alpine")
