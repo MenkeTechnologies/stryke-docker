@@ -11,9 +11,9 @@ p Docker::logs($c, tail => "20", timestamps => 1)
 
 p ""
 p "── streaming new lines (Ctrl-C to stop, 100-chunk cap)"
-var $n = 0
-Docker::logs_follow $c,
+mysync $n = 0
+Docker::logs_follow($c,
     callback => sub ($stream, $data) {
         print $data
         exit 0 if ++$n >= 100
-    }
+    })

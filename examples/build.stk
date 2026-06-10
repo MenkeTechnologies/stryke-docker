@@ -9,7 +9,7 @@ val $tag = $ARGV[1] // "stryke-build:latest"
 
 p "building $dir → $tag"
 
-val $n = Docker::build $dir,
+val $n = Docker::build($dir,
     tag        => $tag,
     pull       => 1,
     rm         => 1,
@@ -22,6 +22,6 @@ val $n = Docker::build $dir,
         } elsif (defined $evt->{aux} && defined $evt->{aux}{ID}) {
             p "==> built $evt->{aux}{ID}"
         }
-    }
+    })
 
 p "build complete (#{$n} events)"
