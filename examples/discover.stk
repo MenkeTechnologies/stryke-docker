@@ -1,0 +1,38 @@
+#!/usr/bin/env stryke
+# examples/discover.stk — minimum-viable tour of the `Docker` package.
+#
+# Runs end-to-end in CI: eval-guarded `Docker::ping` returns false-ish
+# when no daemon is reachable. With $DOCKER_HOST or a unix socket up,
+# the read-only discovery (info, ps -a, image count) runs with zero
+# side effects.
+#
+# Run:   s examples/discover.stk
+#        DOCKER_HOST=tcp://localhost:2375 s examples/discover.stk
+
+use Docker
+
+p "=== Docker discover ==="
+val $vinfo = eval { Docker::version() }
+p "version:     " . (defined $vinfo ? $vinfo->{Version} : "(daemon unreachable)")
+p "DOCKER_HOST: " . ($ENV{DOCKER_HOST} // "(default unix socket)")
+p ""
+
+val $alive = !$@ && defined $vinfo && eval { Docker::ping() }
+
+if ($alive && !$@) {
+    p "service: reachable — daemon info + container counts"
+    val $info = Docker::info()
+    p "  Containers: " . ($info->{Containers} // 0)
+    p "  Running:    " . ($info->{ContainersRunning} // 0)
+    p "  Images:     " . ($info->{Images} // 0)
+    val @all = Docker::ps(all => 1)
+    p "  ps -a:      " . scalar(@all) . " container(s)"
+} else {
+    p "service: not reachable — skipping live ops"
+    p ""
+    p "expected call shape when live:"
+    p "  val \$info = Docker::info()"
+    p "  val @ps   = Docker::ps(all => 1)"
+    p "  val \$insp = Docker::inspect(\$container)"
+    p "  Docker::pull(\"nginx:alpine\")"
+}
