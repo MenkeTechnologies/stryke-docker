@@ -692,4 +692,43 @@ mod tests {
         assert_eq!(string_vec_from_value(&json!("not-array")), None);
         assert_eq!(string_vec_from_value(&json!([])), Some(vec![]));
     }
+
+    /// A nested struct must round-trip through `to_value` with its fields
+    /// preserved. Catches a regression where serde's "humanized" form
+    /// (e.g. snake_case rename, tag flattening) silently changes the
+    /// JSON shape downstream callers depend on.
+    #[test]
+    fn to_value_preserves_nested_struct_fields() {
+        #[derive(serde::Serialize)]
+        struct Outer {
+            name: String,
+            inner: Inner,
+        }
+        #[derive(serde::Serialize)]
+        struct Inner {
+            count: i32,
+            tags: Vec<String>,
+        }
+        let o = Outer {
+            name: "stryke".into(),
+            inner: Inner {
+                count: 3,
+                tags: vec!["a".into(), "b".into()],
+            },
+        };
+        let v = to_value(o);
+        assert_eq!(v["name"], json!("stryke"));
+        assert_eq!(v["inner"]["count"], json!(3));
+        assert_eq!(v["inner"]["tags"], json!(["a", "b"]));
+    }
+
+    /// Empty array input to `string_vec_from_value` should be `Some(vec![])`,
+    /// NOT `None`. Distinguishing "supplied but empty" from "not supplied"
+    /// matters: an explicit empty `cmd` means "no command override" vs a
+    /// missing `cmd` means "use the image's default ENTRYPOINT".
+    #[test]
+    fn string_vec_empty_array_is_some_not_none() {
+        assert_eq!(string_vec_from_value(&json!([])), Some(vec![]));
+        assert_eq!(string_vec_from_value(&Value::Null), None);
+    }
 }
