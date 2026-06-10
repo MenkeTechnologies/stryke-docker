@@ -1,0 +1,45 @@
+#!/usr/bin/env stryke
+# examples/health.stk — daemon snapshot + per-container resource summary.
+#
+# Read-only: info, ps -a, inspect on a few running containers. Eval-guarded
+# so missing daemon exits cleanly.
+#
+# Run:   s examples/health.stk
+#        DOCKER_HOST=tcp://localhost:2375 s examples/health.stk
+
+use Docker
+
+p "=== Docker health snapshot ==="
+
+val $info = eval { Docker::info() }
+if ($@ || !defined $info) {
+    p "docker daemon not reachable — start docker or set DOCKER_HOST to exercise the demo"
+    exit 0
+}
+
+p "Containers:      " . ($info->{Containers}        // 0)
+p "  Running:       " . ($info->{ContainersRunning} // 0)
+p "  Paused:        " . ($info->{ContainersPaused}  // 0)
+p "  Stopped:       " . ($info->{ContainersStopped} // 0)
+p "Images:          " . ($info->{Images}            // 0)
+p "Server version:  " . ($info->{ServerVersion}     // "?")
+p ""
+
+# Per-container resource snapshot for running containers.
+val @running = Docker::ps()
+val $shown = scalar(@running) < 5 ? scalar(@running) : 5
+
+if ($shown > 0) {
+    p "── first $shown running container(s) ──"
+    for (var $i = 0; $i < $shown; $i++) {
+        val $c = $running[$i]
+        val $insp = eval { Docker::inspect($c->{Id}) }
+        next if $@
+        val $img = $c->{Image} // "?"
+        val $name = ($c->{Names}[0] // "?") =~ s|^/||r
+        val $status = $insp->{State}{Status} // "?"
+        p "  $name ($img): $status"
+    }
+} else {
+    p "no running containers"
+}
