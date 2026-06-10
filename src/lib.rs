@@ -830,9 +830,7 @@ mod tests {
     #[test]
     fn ffi_call_async_handler_error_maps_to_error_key_string() {
         let args = CString::new("{}").unwrap();
-        let ptr = ffi_call_async(args.as_ptr(), |_v| async {
-            Err(anyhow!("missing image"))
-        });
+        let ptr = ffi_call_async(args.as_ptr(), |_v| async { Err(anyhow!("missing image")) });
         let s = unsafe { read_and_free(ptr) }.expect("error path must not return null ptr");
         let v: Value = serde_json::from_str(&s).expect("error path output must be valid JSON");
         assert_eq!(
