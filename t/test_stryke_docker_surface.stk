@@ -1,0 +1,52 @@
+## t/test_stryke_docker_surface.stk — wrapper-completeness pin.
+##
+## Asserts every public `fn X::Y::name` declared in lib/*.stk is
+## reachable via `use` at runtime. Uses `exists &X::Y::name` to
+## probe the symbol table without invoking the sub.
+##
+## Catches:
+##   * a wrapper sub deleted from lib/ but still referenced elsewhere
+##   * a sub-package file dropped from the install layout
+##   * `use Foo::Bar` failing to chase into lib/Bar.stk
+##   * an installed-package entry whose namespace bridge is broken
+##
+## Permission-free — no service, no creds, no live daemon. Private
+## helpers (`_` prefix) are implementation detail and are NOT
+## asserted, so refactoring internals stays free.
+
+use Docker
+
+# ── Docker.stk ──────────────────────────────────────────────
+assert_ok exists &Docker::version, "Docker::version exists"
+assert_ok exists &Docker::pkg_version, "Docker::pkg_version exists"
+assert_ok exists &Docker::ping, "Docker::ping exists"
+assert_ok exists &Docker::info, "Docker::info exists"
+assert_ok exists &Docker::ps, "Docker::ps exists"
+assert_ok exists &Docker::inspect, "Docker::inspect exists"
+assert_ok exists &Docker::create, "Docker::create exists"
+assert_ok exists &Docker::run, "Docker::run exists"
+assert_ok exists &Docker::start, "Docker::start exists"
+assert_ok exists &Docker::stop, "Docker::stop exists"
+assert_ok exists &Docker::restart, "Docker::restart exists"
+assert_ok exists &Docker::kill, "Docker::kill exists"
+assert_ok exists &Docker::rm, "Docker::rm exists"
+assert_ok exists &Docker::logs, "Docker::logs exists"
+assert_ok exists &Docker::logs_follow, "Docker::logs_follow exists"
+assert_ok exists &Docker::exec, "Docker::exec exists"
+assert_ok exists &Docker::images, "Docker::images exists"
+assert_ok exists &Docker::pull, "Docker::pull exists"
+assert_ok exists &Docker::push, "Docker::push exists"
+assert_ok exists &Docker::rmi, "Docker::rmi exists"
+assert_ok exists &Docker::tag, "Docker::tag exists"
+assert_ok exists &Docker::build, "Docker::build exists"
+assert_ok exists &Docker::networks, "Docker::networks exists"
+assert_ok exists &Docker::network_create, "Docker::network_create exists"
+assert_ok exists &Docker::network_rm, "Docker::network_rm exists"
+assert_ok exists &Docker::volumes, "Docker::volumes exists"
+assert_ok exists &Docker::volume_create, "Docker::volume_create exists"
+assert_ok exists &Docker::volume_rm, "Docker::volume_rm exists"
+assert_ok exists &Docker::prune, "Docker::prune exists"
+assert_ok exists &Docker::events, "Docker::events exists"
+assert_ok exists &Docker::stats, "Docker::stats exists"
+
+test_run
