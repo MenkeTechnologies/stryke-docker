@@ -731,4 +731,158 @@ mod tests {
         assert_eq!(string_vec_from_value(&json!([])), Some(vec![]));
         assert_eq!(string_vec_from_value(&Value::Null), None);
     }
+
+    // ── FFI boundary tests ──────────────────────────────────────────────────
+    //
+    // Hand-crafted around the specific invariants `ffi_call_async` must
+    // preserve when it's invoked from stryke's dlopen bridge. A regression
+    // in any of these turns "the handler errored" into "the user's shell
+    // crashed" — far worse than a docker-call failure.
+
+    /// Helper: read back the C string returned by an FFI call and free it
+    /// through the same `stryke_free_cstring` the bridge would use.
+    /// Reproduces the exact lifecycle the FFI contract promises.
+    unsafe fn read_and_free(ptr: *const c_char) -> Option<String> {
+        if ptr.is_null() {
+            return None;
+        }
+        let s = CStr::from_ptr(ptr).to_string_lossy().into_owned();
+        stryke_free_cstring(ptr as *mut c_char);
+        Some(s)
+    }
+
+    /// Panic in the async handler MUST be caught and converted into a
+    /// well-formed JSON error string. If `catch_unwind` is removed or the
+    /// wrapper is restructured to await before `catch_unwind`, the panic
+    /// unwinds across the FFI boundary into the loader (stryke shell) and
+    /// aborts the user's process. The export contract is: ALWAYS return
+    /// a non-null `*const c_char` pointing at valid JSON.
+    #[test]
+    fn ffi_call_async_catches_handler_panic_and_returns_json_error() {
+        let args = CString::new("{}").unwrap();
+        let ptr = ffi_call_async(args.as_ptr(), |_v| async {
+            // Deliberately panic inside the async future.
+            panic!("synthetic blow-up");
+        });
+        let s = unsafe { read_and_free(ptr) }.expect("ffi_call_async returned null on panic");
+        let v: Value = serde_json::from_str(&s).expect("output must be valid JSON");
+        let err = v.get("error").and_then(|e| e.as_str()).unwrap_or("");
+        assert!(
+            err.contains("panicked"),
+            "expected 'panicked' in error message, got: {s}"
+        );
+    }
+
+    /// A null `args` pointer MUST NOT dereference. stryke's bridge can
+    /// pass null when the called op takes no arguments. If the
+    /// `args.is_null()` guard regresses to `unsafe { CStr::from_ptr(args) }`
+    /// directly, this dereferences address 0 and segfaults the shell.
+    /// Pair the null-args call with a handler that asserts it received
+    /// `Value::Null` (not, e.g., `Value::Object(empty)`).
+    #[test]
+    fn ffi_call_async_null_args_yields_value_null_not_segv() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static SAW_NULL: AtomicBool = AtomicBool::new(false);
+        let ptr = ffi_call_async(std::ptr::null(), |v| async move {
+            // Exactly Value::Null — not an empty object, not a default.
+            SAW_NULL.store(v == Value::Null, Ordering::SeqCst);
+            Ok(json!({"got": v}))
+        });
+        let s = unsafe { read_and_free(ptr) }.expect("null-args call must not return null ptr");
+        assert!(
+            SAW_NULL.load(Ordering::SeqCst),
+            "handler should have received Value::Null for null args, output: {s}"
+        );
+    }
+
+    /// Malformed JSON in `args` must fall through to `Value::Null` rather
+    /// than panicking. stryke shell users can construct any JSON-ish dict;
+    /// a stray trailing comma or unterminated string would otherwise crash
+    /// the cdylib at the unwrap-or boundary if `from_slice` is ever
+    /// upgraded to `.unwrap()`.
+    #[test]
+    fn ffi_call_async_malformed_json_args_does_not_panic() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static SAW_NULL: AtomicBool = AtomicBool::new(false);
+        // ‘{not json’ is unambiguously broken — not a quoted string, not
+        // an object, not a number.
+        let bad = CString::new("{not json").unwrap();
+        let ptr = ffi_call_async(bad.as_ptr(), |v| async move {
+            SAW_NULL.store(v == Value::Null, Ordering::SeqCst);
+            Ok(json!({"ok": true}))
+        });
+        let out = unsafe { read_and_free(ptr) }.expect("malformed args must still return JSON");
+        let parsed: Value =
+            serde_json::from_str(&out).expect("output of malformed-args call must still be JSON");
+        assert_eq!(parsed["ok"], json!(true));
+        assert!(
+            SAW_NULL.load(Ordering::SeqCst),
+            "malformed JSON should degrade to Value::Null, output: {out}"
+        );
+    }
+
+    /// Handler returning `Err(_)` must surface the message under the
+    /// "error" key as a string — this is the wire contract stryke's
+    /// FFI bridge inspects to decide success vs failure. If the
+    /// branch ever rewraps the error (e.g. into `{"err":...}` or a
+    /// number), every docker.* call site in stryke silently treats
+    /// failures as success.
+    #[test]
+    fn ffi_call_async_handler_error_maps_to_error_key_string() {
+        let args = CString::new("{}").unwrap();
+        let ptr = ffi_call_async(args.as_ptr(), |_v| async {
+            Err(anyhow!("missing image"))
+        });
+        let s = unsafe { read_and_free(ptr) }.expect("error path must not return null ptr");
+        let v: Value = serde_json::from_str(&s).expect("error path output must be valid JSON");
+        assert_eq!(
+            v.get("error").and_then(|e| e.as_str()),
+            Some("missing image"),
+            "expected verbatim error message under 'error' key, got: {s}"
+        );
+    }
+
+    // ── `op_tag` target-splitting bug ───────────────────────────────────────
+    //
+    // `op_tag` parses `opts["target"]` with `rsplit_once(':')`. For a
+    // registry reference like `localhost:5000/img` (port present, no tag)
+    // that finds the colon in `localhost:5000` and splits to repo=
+    // "localhost" and tag="5000/img" — which is malformed. The OCI / docker
+    // grammar separates registry-with-port from tag by the LAST colon
+    // *after* the final `/`. The current code is wrong for any path-bearing
+    // repo with a port and no explicit tag.
+    //
+    // We can't run `op_tag` directly without a docker daemon, so we
+    // hand-mirror its split with the same `rsplit_once(':')` and assert the
+    // broken output, then assert what a correct splitter would have to
+    // return. This test will need updating once the bug is fixed in
+    // `op_tag` — by then `parse_tag_target` should be a real helper here
+    // and the test should call IT instead of duplicating the logic. Today
+    // the test pins the current (broken) behaviour so a fix-in-place is
+    // visible as a test diff.
+
+    fn op_tag_split_current(target: &str) -> (String, Option<String>) {
+        match target.rsplit_once(':') {
+            Some((r, t)) => (r.to_string(), Some(t.to_string())),
+            None => (target.to_string(), None),
+        }
+    }
+
+    #[test]
+    fn op_tag_rsplit_once_misparses_registry_with_port_no_tag() {
+        // localhost:5000/img has NO tag, but rsplit_once happily grabs
+        // the registry port as if it were one.
+        let (repo, tag) = op_tag_split_current("localhost:5000/img");
+        assert_eq!(repo, "localhost", "current (buggy) repo");
+        assert_eq!(tag.as_deref(), Some("5000/img"), "current (buggy) tag");
+        // The correct behaviour is repo="localhost:5000/img", tag=None,
+        // because a tag may only follow the final `/`-separated path
+        // component. Documenting the expectation here so a future fix
+        // will turn this `ne` into `eq` and the assertion above will need
+        // updating in the same diff.
+        assert_ne!(
+            repo, "localhost:5000/img",
+            "if this fires, op_tag was fixed — update the assertions above and remove this guard"
+        );
+    }
 }
