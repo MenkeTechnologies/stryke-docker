@@ -12,17 +12,14 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![stryke](https://img.shields.io/badge/stryke-package-cyan.svg)](https://github.com/MenkeTechnologies/strykelang)
 
-### `[DOCKER CLIENT FOR STRYKE // CONTAINERS + IMAGES + NETWORKS + VOLUMES + BUILD + LOGS + EXEC + EVENTS]`
+### `[DOCKER CLIENT FOR STRYKE // CONTAINERS + IMAGES + NETWORKS + VOLUMES + LOGS + EXEC + PRUNE]`
 
 > *"The docker daemon, scriptable from a one-liner."*
 
-Docker client for stryke. Containers, images, networks, volumes, build,
-logs, exec, events against any reachable Docker daemon (Docker Desktop,
-Linux daemon, Podman with the docker-API socket, remote DOCKER_HOST,
-TLS-wrapped). Opt-in package tier.
-
-> The CLI launcher is named `dock` (not `docker`) to avoid shadowing
-> the real `docker` binary on $PATH after `s pkg install -g .`.
+Docker client for stryke. Containers, images, networks, volumes, logs,
+exec, prune against any reachable Docker daemon (Docker Desktop, Linux
+daemon, Podman with the docker-API socket, remote DOCKER_HOST). Opt-in
+package tier.
 
 ### [`strykelang`](https://github.com/MenkeTechnologies/strykelang) &middot; [`MenkeTechnologiesMeta`](https://github.com/MenkeTechnologies/MenkeTechnologiesMeta) · [`stryke-k8s`](https://github.com/MenkeTechnologies/stryke-k8s) · [`stryke-kafka`](https://github.com/MenkeTechnologies/stryke-kafka) · [`stryke-demo`](https://github.com/MenkeTechnologies/stryke-demo)
 
@@ -32,13 +29,12 @@ TLS-wrapped). Opt-in package tier.
 
 - [\[0x00\] Install](#0x00-install)
 - [\[0x01\] Quick start](#0x01-quick-start)
-- [\[0x02\] CLI: `dock`](#0x02-cli-dock)
-- [\[0x03\] API reference](#0x03-api-reference)
-- [\[0x04\] Helper protocol](#0x04-helper-protocol)
-- [\[0x05\] Tests](#0x05-tests)
-- [\[0x06\] Dev workflow](#0x06-dev-workflow)
-- [\[0x07\] Layout](#0x07-layout)
-- [\[0x08\] Roadmap](#0x08-roadmap)
+- [\[0x02\] API reference](#0x02-api-reference)
+- [\[0x03\] FFI layer](#0x03-ffi-layer)
+- [\[0x04\] Tests](#0x04-tests)
+- [\[0x05\] Dev workflow](#0x05-dev-workflow)
+- [\[0x06\] Layout](#0x06-layout)
+- [\[0x07\] Roadmap](#0x07-roadmap)
 - [\[0xFF\] License](#0xff-license)
 
 ---
@@ -98,26 +94,8 @@ for my $c (@web) {
 # Buffered logs.
 p Docker::logs "web", tail => "50", timestamps => 1
 
-# Streaming logs.
-Docker::logs_follow "web",
-    callback => sub ($stream, $data) { print $data }
-
-# Exec.
-my $r = Docker::exec "web", ["sh", "-c", "nginx -v"],
-    callback => sub ($s, $d) { print $d }
-p "exit_code=$r->{exit_code}"
-
-# Stats snapshot.
-my $s = Docker::stats "web"
-p "mem=$s->{memory_stats}{usage} cpu_total=$s->{cpu_stats}{cpu_usage}{total_usage}"
-
-# Build from a context dir.
-Docker::build "./app",
-    tag        => "my/app:latest",
-    pull       => 1,
-    rm         => 1,
-    build_args => { COMMIT => "abc123" },
-    callback   => sub ($evt) { print $evt->{stream} if defined $evt->{stream} }
+# Exec — returns captured stdout+stderr.
+p Docker::exec "web", ["sh", "-c", "nginx -v"]
 
 # Networks + volumes.
 Docker::network_create "appnet", driver => "bridge", subnet => "10.42.0.0/24"
@@ -142,58 +120,7 @@ my %remote = (host => "tcp://docker.example.com:2376", timeout => 30)
 Docker::ps %remote
 ```
 
-## [0x02] CLI: `dock`
-
-```sh
-dock ping
-dock version
-dock info
-dock events --filter type=container
-
-dock ps --all --filter label=app=web
-dock inspect web
-dock run nginx:alpine --name web -p 8080:80/tcp -l app=web
-dock create nginx:alpine --name worker
-dock start  web
-dock stop   web --time=5
-dock restart web
-dock kill   web --signal=SIGTERM
-dock rm     web --force --volumes
-dock logs   web --tail=50 --timestamps
-dock logs   web --follow
-dock exec   web --cmd sh -- -c "nginx -v"
-dock stats  web
-dock stats  web --stream
-
-dock images
-dock pull   nginx:alpine
-dock push   my/app:1.2.3
-dock rmi    nginx:alpine
-dock tag    sha256:abc... my/app:latest
-dock build  ./app --tag my/app:latest --pull --rm --build-arg COMMIT=abc123
-
-dock networks
-dock network-create appnet --driver bridge --subnet 10.42.0.0/24
-dock network-rm     appnet
-
-dock volumes
-dock volume-create appdata
-dock volume-rm     appdata --force
-
-dock prune --all
-dock prune --containers --images
-
-dock build-helper      # cargo build --release
-```
-
-Global flags (also env vars):
-
-```
---host URL              $DOCKER_HOST       unix://… or tcp://…
---timeout SECONDS                          API timeout (default 120)
-```
-
-## [0x03] API reference
+## [0x02] API reference
 
 ### Daemon
 
@@ -201,7 +128,7 @@ Global flags (also env vars):
 Docker::ping     %opts → 1 | ""
 Docker::version  %opts → \%info             # Version, ApiVersion, Os, Arch, …
 Docker::info     %opts → \%info
-Docker::events   %opts → $count             # callback => sub ($evt) { … }, since/until/filters
+Docker::events   %opts → dies               # streaming — deferred in v0.2.x cdylib
 ```
 
 ### Containers
@@ -226,22 +153,20 @@ network, workdir, user, hostname, restart, rm, tty`
 
 ```stryke
 Docker::logs         $container, %opts → $text
-Docker::logs_follow  $container, %opts → $chunks   # callback => sub ($stream, $data) { … }
-Docker::exec         $container, \@cmd, %opts → { chunks, exit_code }
-Docker::stats        $container, %opts → \%snapshot
-Docker::stats        $container, stream => 1, callback => sub { … } → $count
+Docker::logs_follow  $container, %opts → dies      # streaming — deferred in v0.2.x cdylib
+Docker::exec         $container, \@cmd, %opts → $output   # captured stdout+stderr
+Docker::stats        $container, %opts → dies      # streaming — deferred in v0.2.x cdylib
 ```
 
 ### Images
 
 ```stryke
 Docker::images   %opts → @{ \%image }
-Docker::pull     $image, %opts → @events | $count       # opts: platform, callback
-Docker::push     $image, %opts → @events | $count       # opts: callback
-Docker::rmi      $image, %opts → \@deleted              # opts: force, noprune
-Docker::tag      $source, $target, %opts → { tagged }
-Docker::build    $dir,  %opts → @events | $count
-    # opts: tag, dockerfile, build_args \%KV, no_cache, pull, rm, callback
+Docker::pull     $image, %opts → @events                # drained event list
+Docker::push     $image, %opts → dies                   # deferred in v0.2.x cdylib
+Docker::rmi      $image, %opts → 1 | 0                  # opts: force
+Docker::tag      $source, $target, %opts → 1 | 0
+Docker::build    $dir,  %opts → dies                    # deferred in v0.2.x cdylib
 ```
 
 ### Networks + volumes
@@ -263,7 +188,7 @@ Docker::prune  %opts → \%report
     # opts: containers, images, volumes, networks, all
 ```
 
-## [0x04] FFI layer
+## [0x03] FFI layer
 
 Each `Docker::*` wrapper builds a JSON args dict and calls a sibling
 `docker__*` symbol resolved out of `libstryke_docker.{dylib,so}`. The
@@ -286,11 +211,11 @@ prune.
 v1's `FfiSig::StrToStr` doesn't model. Calling them dies with a clear
 message.
 
-## [0x05] Tests
+## [0x04] Tests
 
 ```sh
 cargo test                                # compiles, no live calls
-DOCKER_HOST=unix:///var/run/docker.sock s test t/   # 9-test live round-trip
+DOCKER_HOST=unix:///var/run/docker.sock s test t/   # live round-trip
 ```
 
 Tests pull `busybox:latest`, run a sleep container with a unique
@@ -310,7 +235,7 @@ sudo systemctl start docker
 DOCKER_HOST=tcp://192.168.1.10:2375 s test t/
 ```
 
-## [0x06] Dev workflow
+## [0x05] Dev workflow
 
 ```sh
 make             # release build
@@ -320,38 +245,37 @@ make install
 make clean
 ```
 
-## [0x07] Layout
+## [0x06] Layout
 
 ```
 stryke-docker/
   stryke.toml                      # stryke package manifest
-  Cargo.toml                       # Rust helper crate manifest
+  Cargo.toml                       # cdylib crate manifest
   Makefile
-  src/main.rs                      # single-file helper
+  src/lib.rs                       # cdylib — docker__* extern "C" exports
   lib/
     Docker.stk                     # `use Docker`
-  bin/
-    dock.stk                       # `dock` CLI
-    dock-build.stk
   t/
-    test_docker.stk                # 9-test live round-trip
+    test_docker.stk                # live round-trip (gated on a reachable daemon)
+    test_stryke_docker_surface.stk # wrapper-completeness pin
   examples/
-    run.stk
-    logs.stk
     build.stk
+    discover.stk
+    health.stk
+    logs.stk
+    run.stk
   .github/workflows/
-    ci.yml                         # live docker socket + 9-test round-trip
+    ci.yml                         # cargo check/test/clippy + docs lint (no live daemon)
     release.yml                    # cross-compile + GH release on tag push
 ```
 
-## [0x08] Roadmap
+## [0x07] Roadmap
 
-| v1 (this release) | v2+ |
+| Shipped (v0.2.x) | Later |
 |---|---|
 | Local socket + DOCKER_HOST tcp/http | TLS client certs (DOCKER_CERT_PATH / DOCKER_TLS_VERIFY) |
-| One-file context tar (skips `.git/`) | `.dockerignore` honoring |
-| Build / pull / push as event streams | Buildx multi-platform / cross-arch |
-| Exec stdout/stderr stream | Interactive TTY + stdin attach |
+| Pull (drained event list) | Build / push / events / stats / logs --follow (need callback FFI) |
+| Exec with captured stdout+stderr | Interactive TTY + stdin attach |
 | Synchronous create/start/stop | docker-compose v2 file parser |
 | Single-daemon | Swarm services / configs / secrets |
 
