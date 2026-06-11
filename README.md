@@ -281,7 +281,7 @@ prune.
   fork; this reuses the same client + underlying HTTP pool across
   calls.
 
-**Deferred from v0.2.0:** streaming-only ops (`events`, `stats`,
+**Deferred from v0.2.1:** streaming-only ops (`events`, `stats`,
 `logs --follow`, `build`, `push`). These need a callback FFI shape that
 v1's `FfiSig::StrToStr` doesn't model. Calling them dies with a clear
 message.
