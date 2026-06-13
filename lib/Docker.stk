@@ -128,6 +128,47 @@ fn Docker::rm ($container, %opts) {
     Docker::_decode("rm", docker__rm(to_json($r)))->{ok} ? 1 : 0
 }
 
+## Pause a running container. Returns 1 on success.
+fn Docker::pause ($container, %opts) {
+    Docker::_decode("pause", docker__pause(to_json(Docker::_req({ container => $container }, \%opts))))->{ok} ? 1 : 0
+}
+
+## Unpause a paused container. Returns 1 on success.
+fn Docker::unpause ($container, %opts) {
+    Docker::_decode("unpause", docker__unpause(to_json(Docker::_req({ container => $container }, \%opts))))->{ok} ? 1 : 0
+}
+
+## Rename $container to $name. Returns 1 on success.
+fn Docker::rename ($container, $name, %opts) {
+    Docker::_decode("rename",
+        docker__rename(to_json(Docker::_req({ container => $container, name => $name }, \%opts))))->{ok} ? 1 : 0
+}
+
+## Block until $container exits; returns its exit status code.
+fn Docker::wait ($container, %opts) {
+    Docker::_decode("wait",
+        docker__wait(to_json(Docker::_req({ container => $container }, \%opts))))->{status_code}
+}
+
+## Running processes inside $container (docker top). opts: ps_args (default
+## the daemon's). Returns { Titles, Processes }.
+fn Docker::top ($container, %opts) {
+    Docker::_decode("top",
+        docker__top(to_json(Docker::_req({ container => $container, ps_args => $opts{ps_args} }, \%opts))))
+}
+
+## Commit $container's state to a new image. opts: repo, tag (default latest),
+## comment, author, pause (default true). Returns the new image id.
+fn Docker::commit ($container, %opts) {
+    val $r = Docker::_req(
+        { container => $container, repo => $opts{repo}, tag => $opts{tag},
+          comment => $opts{comment}, author => $opts{author},
+          pause => (exists $opts{pause} ? ($opts{pause} ? \1 : \0) : \1) },
+        \%opts
+    )
+    Docker::_decode("commit", docker__commit(to_json($r)))->{id}
+}
+
 # ── logs + exec ──────────────────────────────────────────────────────
 
 ## Snapshot logs of a container as a single string. `tail => N` to limit.
@@ -242,8 +283,11 @@ fn Docker::events (%opts) {
     die "Docker::events: streaming ops are deferred in v0.2.0 cdylib"
 }
 
-## Streaming stats — deferred in v0.2.0 cdylib.
+## One-shot resource-usage snapshot for $container (docker stats --no-stream).
+## Returns the raw stats document (cpu_stats, memory_stats, networks, …).
+## Continuous streaming stats remain deferred (needs a callback FFI shape).
 fn Docker::stats ($container, %opts) {
-    die "Docker::stats: streaming ops are deferred in v0.2.0 cdylib"
+    Docker::_decode("stats",
+        docker__stats(to_json(Docker::_req({ container => $container }, \%opts))))
 }
 

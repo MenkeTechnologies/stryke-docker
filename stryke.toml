@@ -36,6 +36,13 @@ exports = [
     "docker__volume_create",
     "docker__volume_rm",
     "docker__prune",
+    "docker__pause",
+    "docker__unpause",
+    "docker__rename",
+    "docker__wait",
+    "docker__top",
+    "docker__stats",
+    "docker__commit",
 ]
 
 [scripts]

@@ -48,5 +48,11 @@ assert_ok exists &Docker::volume_rm, "Docker::volume_rm exists"
 assert_ok exists &Docker::prune, "Docker::prune exists"
 assert_ok exists &Docker::events, "Docker::events exists"
 assert_ok exists &Docker::stats, "Docker::stats exists"
+assert_ok exists &Docker::pause, "Docker::pause exists"
+assert_ok exists &Docker::unpause, "Docker::unpause exists"
+assert_ok exists &Docker::rename, "Docker::rename exists"
+assert_ok exists &Docker::wait, "Docker::wait exists"
+assert_ok exists &Docker::top, "Docker::top exists"
+assert_ok exists &Docker::commit, "Docker::commit exists"
 
 test_run

@@ -143,6 +143,12 @@ Docker::stop      $container, %opts → { id, stopped }    # opts: time
 Docker::restart   $container, %opts → { id, restarted }
 Docker::kill      $container, %opts → { id, killed }     # opts: signal
 Docker::rm        $container, %opts → { id, removed }    # opts: force, volumes
+Docker::pause     $container, %opts → 1 | 0
+Docker::unpause   $container, %opts → 1 | 0
+Docker::rename    $container, $name, %opts → 1 | 0
+Docker::wait      $container, %opts → $exit_status_code  # blocks until exit
+Docker::top       $container, %opts → { Titles, Processes }   # opts: ps_args
+Docker::commit    $container, %opts → $image_id          # opts: repo, tag, comment, author, pause
 ```
 
 `%opts` for run/create:
@@ -155,7 +161,7 @@ network, workdir, user, hostname, restart, rm, tty`
 Docker::logs         $container, %opts → $text
 Docker::logs_follow  $container, %opts → dies      # streaming — deferred in v0.2.x cdylib
 Docker::exec         $container, \@cmd, %opts → $output   # captured stdout+stderr
-Docker::stats        $container, %opts → dies      # streaming — deferred in v0.2.x cdylib
+Docker::stats        $container, %opts → \%snapshot   # one-shot stats (--no-stream)
 ```
 
 ### Images
@@ -206,10 +212,11 @@ prune.
   fork; this reuses the same client + underlying HTTP pool across
   calls.
 
-**Deferred from v0.2.1:** streaming-only ops (`events`, `stats`,
-`logs --follow`, `build`, `push`). These need a callback FFI shape that
-v1's `FfiSig::StrToStr` doesn't model. Calling them dies with a clear
-message.
+**Snapshot vs. streaming:** `stats` is a one-shot snapshot (`--no-stream`).
+The remaining continuous-stream ops (`events`, `logs --follow`) and the
+auth/tar-heavy `build` / `push` need a callback FFI / credential / tar-stream
+design that the blocking `StrToStr` shape doesn't model yet; calling them
+dies with a clear message.
 
 ## [0x04] Tests
 
@@ -274,10 +281,10 @@ stryke-docker/
 | Shipped (v0.2.x) | Later |
 |---|---|
 | Local socket + DOCKER_HOST tcp/http | TLS client certs (DOCKER_CERT_PATH / DOCKER_TLS_VERIFY) |
-| Pull (drained event list) | Build / push / events / stats / logs --follow (need callback FFI) |
-| Exec with captured stdout+stderr | Interactive TTY + stdin attach |
-| Synchronous create/start/stop | docker-compose v2 file parser |
-| Single-daemon | Swarm services / configs / secrets |
+| Pull (drained event list) | Build / push / events / logs --follow (need callback FFI / tar / auth) |
+| Pause/unpause/rename/wait/top/commit + one-shot stats | Interactive TTY + stdin attach |
+| Exec with captured stdout+stderr | docker-compose v2 file parser |
+| Synchronous create/start/stop | Swarm services / configs / secrets |
 
 ## [0xFF] License
 

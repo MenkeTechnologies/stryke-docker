@@ -21,10 +21,12 @@ use std::panic::AssertUnwindSafe;
 use anyhow::{anyhow, Result};
 use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, LogsOptions, RemoveContainerOptions,
-    StopContainerOptions,
+    RenameContainerOptions, StatsOptions, StopContainerOptions, TopOptions, WaitContainerOptions,
 };
 use bollard::exec::{CreateExecOptions, StartExecResults};
-use bollard::image::{CreateImageOptions, ListImagesOptions, RemoveImageOptions};
+use bollard::image::{
+    CommitContainerOptions, CreateImageOptions, ListImagesOptions, RemoveImageOptions,
+};
 use bollard::network::{CreateNetworkOptions, ListNetworksOptions};
 use bollard::volume::{CreateVolumeOptions, ListVolumesOptions};
 use bollard::Docker;
@@ -454,6 +456,110 @@ async fn op_prune(opts: Value) -> Result<Value> {
     }
 }
 
+// ── container lifecycle extras ───────────────────────────────────────────────
+
+/// Read the required `container` name from opts.
+fn container_name(opts: &Value) -> Result<&str> {
+    opts["container"]
+        .as_str()
+        .ok_or_else(|| anyhow!("missing container"))
+}
+
+async fn op_pause(opts: Value) -> Result<Value> {
+    let name = container_name(&opts)?.to_string();
+    let d = get_client(&opts)?;
+    d.pause_container(&name).await?;
+    Ok(json!({"ok": true}))
+}
+
+async fn op_unpause(opts: Value) -> Result<Value> {
+    let name = container_name(&opts)?.to_string();
+    let d = get_client(&opts)?;
+    d.unpause_container(&name).await?;
+    Ok(json!({"ok": true}))
+}
+
+async fn op_rename(opts: Value) -> Result<Value> {
+    let name = container_name(&opts)?.to_string();
+    let new_name = opts["name"]
+        .as_str()
+        .ok_or_else(|| anyhow!("missing name (the new container name)"))?
+        .to_string();
+    let d = get_client(&opts)?;
+    d.rename_container(
+        &name,
+        RenameContainerOptions {
+            name: new_name.clone(),
+        },
+    )
+    .await?;
+    Ok(json!({"ok": true, "renamed": new_name}))
+}
+
+/// Block until the container exits; returns its exit status code.
+async fn op_wait(opts: Value) -> Result<Value> {
+    let name = container_name(&opts)?.to_string();
+    let d = get_client(&opts)?;
+    let mut stream = d.wait_container(&name, None::<WaitContainerOptions<String>>);
+    match stream.try_next().await? {
+        Some(r) => Ok(json!({"status_code": r.status_code})),
+        None => Ok(json!({"status_code": Value::Null})),
+    }
+}
+
+/// Running processes inside the container (`docker top`). opts: ps_args.
+async fn op_top(opts: Value) -> Result<Value> {
+    let name = container_name(&opts)?.to_string();
+    let options = opts["ps_args"].as_str().map(|a| TopOptions {
+        ps_args: a.to_string(),
+    });
+    let d = get_client(&opts)?;
+    let r = d.top_processes(&name, options).await?;
+    Ok(to_value(r))
+}
+
+/// One-shot resource-usage snapshot (`docker stats --no-stream`). Streaming
+/// stats remain out of scope for the blocking FFI shape.
+async fn op_stats(opts: Value) -> Result<Value> {
+    let name = container_name(&opts)?.to_string();
+    let d = get_client(&opts)?;
+    let mut stream = d.stats(
+        &name,
+        Some(StatsOptions {
+            stream: false,
+            one_shot: true,
+        }),
+    );
+    match stream.try_next().await? {
+        Some(s) => Ok(to_value(s)),
+        None => Err(anyhow!("no stats returned for `{name}`")),
+    }
+}
+
+/// Commit a container's current state to a new image. opts: repo, tag,
+/// comment, author, pause (default true). Returns the new image id.
+async fn op_commit(opts: Value) -> Result<Value> {
+    let name = container_name(&opts)?.to_string();
+    let d = get_client(&opts)?;
+    let repo = opts["repo"].as_str().unwrap_or("").to_string();
+    let tag = opts["tag"].as_str().unwrap_or("latest").to_string();
+    let comment = opts["comment"].as_str().unwrap_or("").to_string();
+    let author = opts["author"].as_str().unwrap_or("").to_string();
+    let options = CommitContainerOptions {
+        container: name,
+        repo,
+        tag,
+        comment,
+        author,
+        pause: opts["pause"].as_bool().unwrap_or(true),
+        changes: None,
+    };
+    let r = d
+        .commit_container(options, Config::<String>::default())
+        .await?;
+    Ok(json!({"id": r.id}))
+}
+
 // ── FFI plumbing ────────────────────────────────────────────────────────────
 
 fn ffi_call_async<F, Fut>(args: *const c_char, handler: F) -> *const c_char
@@ -623,6 +729,41 @@ pub extern "C" fn docker__volume_rm(args: *const c_char) -> *const c_char {
 #[no_mangle]
 pub extern "C" fn docker__prune(args: *const c_char) -> *const c_char {
     ffi_call_async(args, op_prune)
+}
+
+#[no_mangle]
+pub extern "C" fn docker__pause(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, op_pause)
+}
+
+#[no_mangle]
+pub extern "C" fn docker__unpause(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, op_unpause)
+}
+
+#[no_mangle]
+pub extern "C" fn docker__rename(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, op_rename)
+}
+
+#[no_mangle]
+pub extern "C" fn docker__wait(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, op_wait)
+}
+
+#[no_mangle]
+pub extern "C" fn docker__top(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, op_top)
+}
+
+#[no_mangle]
+pub extern "C" fn docker__stats(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, op_stats)
+}
+
+#[no_mangle]
+pub extern "C" fn docker__commit(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, op_commit)
 }
 
 #[cfg(test)]
@@ -963,6 +1104,53 @@ mod tests {
             tag, "latest",
             "if this fires, op_tag normalizes Some(\"\") to 'latest' too — \
              update the assertions above and remove this guard"
+        );
+    }
+
+    // ── new-surface coverage ─────────────────────────────────────────────────
+
+    #[test]
+    fn container_name_requires_the_field() {
+        assert_eq!(container_name(&json!({"container": "web"})).unwrap(), "web");
+        assert!(container_name(&json!({}))
+            .unwrap_err()
+            .to_string()
+            .contains("missing container"));
+    }
+
+    /// Drive a new export the way stryke's bridge does. `get_client` connects
+    /// lazily, so a missing required arg surfaces as an error WITHOUT a live
+    /// daemon — these pin that contract for the new container ops.
+    fn call_export(f: extern "C" fn(*const c_char) -> *const c_char, arg: &str) -> Value {
+        let cs = CString::new(arg).unwrap();
+        let raw = f(cs.as_ptr());
+        assert!(!raw.is_null());
+        let out = unsafe { CStr::from_ptr(raw) }.to_str().unwrap().to_string();
+        unsafe { stryke_free_cstring(raw as *mut c_char) };
+        serde_json::from_str(&out).unwrap()
+    }
+
+    #[test]
+    fn new_container_ops_reject_missing_args_offline() {
+        for f in [
+            docker__pause,
+            docker__unpause,
+            docker__wait,
+            docker__top,
+            docker__stats,
+            docker__commit,
+        ] {
+            let v = call_export(f, "{}");
+            assert_eq!(
+                v["error"], "missing container",
+                "export must reject missing container offline; got {v}"
+            );
+        }
+        // rename needs both container and the new name.
+        let v = call_export(docker__rename, r#"{"container":"web"}"#);
+        assert!(
+            v["error"].as_str().unwrap().contains("missing name"),
+            "rename must require the new name; got {v}"
         );
     }
 }
