@@ -43,6 +43,9 @@ exports = [
     "docker__top",
     "docker__stats",
     "docker__commit",
+    "docker__diff",
+    "docker__history",
+    "docker__df",
 ]
 
 [scripts]

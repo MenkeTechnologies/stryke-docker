@@ -162,6 +162,9 @@ Docker::logs         $container, %opts → $text
 Docker::logs_follow  $container, %opts → dies      # streaming — deferred in v0.2.x cdylib
 Docker::exec         $container, \@cmd, %opts → $output   # captured stdout+stderr
 Docker::stats        $container, %opts → \%snapshot   # one-shot stats (--no-stream)
+Docker::diff         $container, %opts → @{ {Path, Kind} }   # fs changes vs image (0 mod,1 add,2 del)
+Docker::history      $image, %opts → @layers           # image build history
+Docker::df           %opts → \%usage                   # docker system df (images/containers/volumes/cache)
 ```
 
 ### Images

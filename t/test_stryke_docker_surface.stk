@@ -55,4 +55,9 @@ assert_ok exists &Docker::wait, "Docker::wait exists"
 assert_ok exists &Docker::top, "Docker::top exists"
 assert_ok exists &Docker::commit, "Docker::commit exists"
 
+# ── Docker.stk inspection extras ──
+assert_ok exists &Docker::diff, "Docker::diff exists"
+assert_ok exists &Docker::history, "Docker::history exists"
+assert_ok exists &Docker::df, "Docker::df exists"
+
 test_run

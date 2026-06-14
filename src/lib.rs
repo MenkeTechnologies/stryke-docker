@@ -560,6 +560,31 @@ async fn op_commit(opts: Value) -> Result<Value> {
     Ok(json!({"id": r.id}))
 }
 
+// ── inspection extras ─────────────────────────────────────────────────────────
+
+async fn op_diff(opts: Value) -> Result<Value> {
+    let name = container_name(&opts)?.to_string();
+    let d = get_client(&opts)?;
+    // FilesystemChange.kind: 0 = modified, 1 = added, 2 = deleted.
+    let changes = d.container_changes(&name).await?.unwrap_or_default();
+    Ok(json!({"changes": to_value(changes)}))
+}
+
+async fn op_history(opts: Value) -> Result<Value> {
+    let image = opts["image"]
+        .as_str()
+        .ok_or_else(|| anyhow!("missing image"))?;
+    let d = get_client(&opts)?;
+    let layers = d.image_history(image).await?;
+    Ok(json!({"history": to_value(layers)}))
+}
+
+async fn op_df(opts: Value) -> Result<Value> {
+    let d = get_client(&opts)?;
+    let usage = d.df().await?;
+    Ok(to_value(usage))
+}
+
 // ── FFI plumbing ────────────────────────────────────────────────────────────
 
 fn ffi_call_async<F, Fut>(args: *const c_char, handler: F) -> *const c_char
@@ -764,6 +789,21 @@ pub extern "C" fn docker__stats(args: *const c_char) -> *const c_char {
 #[no_mangle]
 pub extern "C" fn docker__commit(args: *const c_char) -> *const c_char {
     ffi_call_async(args, op_commit)
+}
+
+#[no_mangle]
+pub extern "C" fn docker__diff(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, op_diff)
+}
+
+#[no_mangle]
+pub extern "C" fn docker__history(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, op_history)
+}
+
+#[no_mangle]
+pub extern "C" fn docker__df(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, op_df)
 }
 
 #[cfg(test)]

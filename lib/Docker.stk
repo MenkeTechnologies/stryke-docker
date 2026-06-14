@@ -291,3 +291,23 @@ fn Docker::stats ($container, %opts) {
         docker__stats(to_json(Docker::_req({ container => $container }, \%opts))))
 }
 
+# ── inspection extras ────────────────────────────────────────────────
+
+## Filesystem changes in $container vs its image. Each: { Path, Kind }
+## (Kind 0 = modified, 1 = added, 2 = deleted).
+fn Docker::diff ($container, %opts) {
+    @{ Docker::_decode("diff",
+        docker__diff(to_json(Docker::_req({ container => $container }, \%opts))))->{changes} }
+}
+
+## Build history (layers) of an $image. Each layer: { Id, Created, CreatedBy, Size, ... }.
+fn Docker::history ($image, %opts) {
+    @{ Docker::_decode("history",
+        docker__history(to_json(Docker::_req({ image => $image }, \%opts))))->{history} }
+}
+
+## Disk usage (`docker system df`): images, containers, volumes, build cache.
+fn Docker::df (%opts) {
+    Docker::_decode("df", docker__df(to_json(Docker::_req({}, \%opts))))
+}
+
