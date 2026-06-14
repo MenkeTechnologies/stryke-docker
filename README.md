@@ -167,6 +167,9 @@ Docker::history      $image, %opts → @layers           # image build history
 Docker::df           %opts → \%usage                   # docker system df (images/containers/volumes/cache)
 Docker::port         $container, %opts → \%ports        # { "80/tcp" => [{HostIp, HostPort}] }
 Docker::update       $container, %opts → \%resp         # live limits: memory, cpu_shares, cpu_quota, cpuset_cpus
+Docker::image_inspect   $image, %opts → \%info          # config, layers, RootFS
+Docker::volume_inspect  $volume, %opts → \%info         # driver, mountpoint, labels
+Docker::network_inspect $network, %opts → \%info        # driver, subnet, connected containers
 ```
 
 ### Images

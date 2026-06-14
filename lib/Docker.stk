@@ -330,3 +330,21 @@ fn Docker::update ($container, %opts) {
     Docker::_decode("update", docker__update(to_json($r)))
 }
 
+## Inspect an image — full config, layers, RootFS, history summary.
+fn Docker::image_inspect ($image, %opts) {
+    Docker::_decode("image_inspect",
+        docker__image_inspect(to_json(Docker::_req({ image => $image }, \%opts))))
+}
+
+## Inspect a volume — driver, mountpoint, labels, options.
+fn Docker::volume_inspect ($volume, %opts) {
+    Docker::_decode("volume_inspect",
+        docker__volume_inspect(to_json(Docker::_req({ volume => $volume }, \%opts))))
+}
+
+## Inspect a network — driver, subnet/gateway, connected containers.
+fn Docker::network_inspect ($network, %opts) {
+    Docker::_decode("network_inspect",
+        docker__network_inspect(to_json(Docker::_req({ network => $network }, \%opts))))
+}
+

@@ -613,6 +613,36 @@ async fn op_update(opts: Value) -> Result<Value> {
     Ok(json!({"ok": true, "updated": name}))
 }
 
+async fn op_image_inspect(opts: Value) -> Result<Value> {
+    let d = get_client(&opts)?;
+    let image = opts["image"]
+        .as_str()
+        .ok_or_else(|| anyhow!("missing image"))?;
+    let info = d.inspect_image(image).await?;
+    Ok(to_value(info))
+}
+
+async fn op_volume_inspect(opts: Value) -> Result<Value> {
+    let d = get_client(&opts)?;
+    let volume = opts["volume"]
+        .as_str()
+        .ok_or_else(|| anyhow!("missing volume"))?;
+    let info = d.inspect_volume(volume).await?;
+    Ok(to_value(info))
+}
+
+async fn op_network_inspect(opts: Value) -> Result<Value> {
+    use bollard::network::InspectNetworkOptions;
+    let d = get_client(&opts)?;
+    let network = opts["network"]
+        .as_str()
+        .ok_or_else(|| anyhow!("missing network"))?;
+    let info = d
+        .inspect_network(network, None::<InspectNetworkOptions<String>>)
+        .await?;
+    Ok(to_value(info))
+}
+
 // ── FFI plumbing ────────────────────────────────────────────────────────────
 
 fn ffi_call_async<F, Fut>(args: *const c_char, handler: F) -> *const c_char
@@ -842,6 +872,21 @@ pub extern "C" fn docker__port(args: *const c_char) -> *const c_char {
 #[no_mangle]
 pub extern "C" fn docker__update(args: *const c_char) -> *const c_char {
     ffi_call_async(args, op_update)
+}
+
+#[no_mangle]
+pub extern "C" fn docker__image_inspect(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, op_image_inspect)
+}
+
+#[no_mangle]
+pub extern "C" fn docker__volume_inspect(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, op_volume_inspect)
+}
+
+#[no_mangle]
+pub extern "C" fn docker__network_inspect(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, op_network_inspect)
 }
 
 #[cfg(test)]

@@ -48,6 +48,9 @@ exports = [
     "docker__df",
     "docker__port",
     "docker__update",
+    "docker__image_inspect",
+    "docker__volume_inspect",
+    "docker__network_inspect",
 ]
 
 [scripts]

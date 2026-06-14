@@ -63,4 +63,8 @@ assert_ok exists &Docker::df, "Docker::df exists"
 assert_ok exists &Docker::port, "Docker::port exists"
 assert_ok exists &Docker::update, "Docker::update exists"
 
+assert_ok exists &Docker::image_inspect, "Docker::image_inspect exists"
+assert_ok exists &Docker::volume_inspect, "Docker::volume_inspect exists"
+assert_ok exists &Docker::network_inspect, "Docker::network_inspect exists"
+
 test_run
