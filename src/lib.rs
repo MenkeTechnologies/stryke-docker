@@ -585,6 +585,34 @@ async fn op_df(opts: Value) -> Result<Value> {
     Ok(to_value(usage))
 }
 
+async fn op_port(opts: Value) -> Result<Value> {
+    let name = container_name(&opts)?.to_string();
+    let d = get_client(&opts)?;
+    // Container port map: container-port/proto -> [{ host_ip, host_port }, ...].
+    let info = d.inspect_container(&name, None).await?;
+    let ports = info.network_settings.and_then(|ns| ns.ports);
+    Ok(json!({"container": name, "ports": to_value(ports)}))
+}
+
+async fn op_update(opts: Value) -> Result<Value> {
+    use bollard::container::UpdateContainerOptions;
+    let name = container_name(&opts)?.to_string();
+    let d = get_client(&opts)?;
+    // Live resource limits. Only the fields the caller supplies are changed;
+    // omitted ones keep their current value (None = leave alone).
+    let config = UpdateContainerOptions::<String> {
+        memory: opts["memory"].as_i64(),
+        memory_swap: opts["memory_swap"].as_i64(),
+        cpu_shares: opts["cpu_shares"].as_i64().map(|n| n as isize),
+        cpu_quota: opts["cpu_quota"].as_i64(),
+        cpu_period: opts["cpu_period"].as_i64(),
+        cpuset_cpus: opts["cpuset_cpus"].as_str().map(String::from),
+        ..Default::default()
+    };
+    d.update_container(&name, config).await?;
+    Ok(json!({"ok": true, "updated": name}))
+}
+
 // ── FFI plumbing ────────────────────────────────────────────────────────────
 
 fn ffi_call_async<F, Fut>(args: *const c_char, handler: F) -> *const c_char
@@ -804,6 +832,16 @@ pub extern "C" fn docker__history(args: *const c_char) -> *const c_char {
 #[no_mangle]
 pub extern "C" fn docker__df(args: *const c_char) -> *const c_char {
     ffi_call_async(args, op_df)
+}
+
+#[no_mangle]
+pub extern "C" fn docker__port(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, op_port)
+}
+
+#[no_mangle]
+pub extern "C" fn docker__update(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, op_update)
 }
 
 #[cfg(test)]

@@ -165,6 +165,8 @@ Docker::stats        $container, %opts → \%snapshot   # one-shot stats (--no-s
 Docker::diff         $container, %opts → @{ {Path, Kind} }   # fs changes vs image (0 mod,1 add,2 del)
 Docker::history      $image, %opts → @layers           # image build history
 Docker::df           %opts → \%usage                   # docker system df (images/containers/volumes/cache)
+Docker::port         $container, %opts → \%ports        # { "80/tcp" => [{HostIp, HostPort}] }
+Docker::update       $container, %opts → \%resp         # live limits: memory, cpu_shares, cpu_quota, cpuset_cpus
 ```
 
 ### Images

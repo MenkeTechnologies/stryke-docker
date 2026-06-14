@@ -46,6 +46,8 @@ exports = [
     "docker__diff",
     "docker__history",
     "docker__df",
+    "docker__port",
+    "docker__update",
 ]
 
 [scripts]

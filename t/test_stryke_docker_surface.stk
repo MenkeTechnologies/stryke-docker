@@ -60,4 +60,7 @@ assert_ok exists &Docker::diff, "Docker::diff exists"
 assert_ok exists &Docker::history, "Docker::history exists"
 assert_ok exists &Docker::df, "Docker::df exists"
 
+assert_ok exists &Docker::port, "Docker::port exists"
+assert_ok exists &Docker::update, "Docker::update exists"
+
 test_run

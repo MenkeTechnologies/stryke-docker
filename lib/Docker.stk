@@ -311,3 +311,22 @@ fn Docker::df (%opts) {
     Docker::_decode("df", docker__df(to_json(Docker::_req({}, \%opts))))
 }
 
+## Port map of $container: { "80/tcp" => [{ HostIp, HostPort }], ... }.
+fn Docker::port ($container, %opts) {
+    Docker::_decode("port",
+        docker__port(to_json(Docker::_req({ container => $container }, \%opts))))->{ports}
+}
+
+## Update a running $container's resource limits. opts: memory, memory_swap
+## (bytes), cpu_shares, cpu_quota, cpu_period, cpuset_cpus. Only the supplied
+## fields change.
+fn Docker::update ($container, %opts) {
+    val $r = Docker::_req(
+        { container => $container, memory => $opts{memory}, memory_swap => $opts{memory_swap},
+          cpu_shares => $opts{cpu_shares}, cpu_quota => $opts{cpu_quota},
+          cpu_period => $opts{cpu_period}, cpuset_cpus => $opts{cpuset_cpus} },
+        \%opts
+    )
+    Docker::_decode("update", docker__update(to_json($r)))
+}
+
