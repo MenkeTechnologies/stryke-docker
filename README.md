@@ -172,6 +172,14 @@ Docker::volume_inspect  $volume, %opts → \%info         # driver, mountpoint, 
 Docker::network_inspect $network, %opts → \%info        # driver, subnet, connected containers
 ```
 
+### Pure helpers (no daemon)
+
+```stryke
+Docker::parse_image_ref($ref)      → { registry, namespace, repository, tag, digest, path }
+Docker::valid_container_name($n)   → 1 | ""    # /?[a-zA-Z0-9][a-zA-Z0-9_.-]+
+Docker::parse_port_spec($spec)     → { host_ip, host_port, container_port, protocol }
+```
+
 ### Images
 
 ```stryke
@@ -207,9 +215,11 @@ Docker::prune  %opts → \%report
 Each `Docker::*` wrapper builds a JSON args dict and calls a sibling
 `docker__*` symbol resolved out of `libstryke_docker.{dylib,so}`. The
 cdylib is dlopened in-process on first `use Docker` (via stryke's
-`pkg::commands::try_load_ffi_for` resolver hook) and exposes 25 entry
-points covering containers, images, networks, volumes, exec, logs, and
-prune.
+`pkg::commands::try_load_ffi_for` resolver hook). Its exports cover
+containers, images, networks, volumes, exec, logs, and prune, plus
+daemon-free helpers (`docker__parse_image_ref`,
+`docker__valid_container_name`, `docker__parse_port_spec`). The
+authoritative list is `[ffi].exports` in `stryke.toml`.
 
 **Persistent state:**
 

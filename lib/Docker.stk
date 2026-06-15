@@ -348,3 +348,26 @@ fn Docker::network_inspect ($network, %opts) {
         docker__network_inspect(to_json(Docker::_req({ network => $network }, \%opts))))
 }
 
+# ── pure helpers (no daemon) ──────────────────────────────────────────
+
+## Parse an image reference "[registry[:port]/]name[:tag][@digest]" into a
+## hashref { registry, namespace, repository, tag, digest, path }. Tag defaults
+## to "latest" unless a digest pins it. Contacts no registry.
+fn Docker::parse_image_ref ($ref) {
+    Docker::_decode("parse_image_ref", docker__parse_image_ref(to_json({ ref => $ref })))
+}
+
+## True if $name is a valid Docker container/volume/network name
+## (/?[a-zA-Z0-9][a-zA-Z0-9_.-]+).
+fn Docker::valid_container_name ($name) {
+    Docker::_decode("valid_container_name",
+        docker__valid_container_name(to_json({ name => $name })))->{valid}
+}
+
+## Parse a -p port spec "[host_ip:][host_port:]container_port[/proto]" into a
+## hashref { host_ip, host_port, container_port, protocol }. IPv6 hosts must be
+## bracketed.
+fn Docker::parse_port_spec ($spec) {
+    Docker::_decode("parse_port_spec", docker__parse_port_spec(to_json({ spec => $spec })))
+}
+

@@ -126,7 +126,7 @@
 
       <hr class="section-rule">
       <h2 class="tutorial-title"><span class="step-hash">&amp;</span>FFI ENVELOPE</h2>
-      <p>JSON in / JSON out across the FFI boundary. Each <code>Docker::*</code> wrapper serializes its args to a JSON dict and calls the matching <code>docker__*</code> symbol resolved out of <code>libstryke_docker.{dylib,so}</code>; the cdylib returns a JSON <code>CString</code> the wrapper parses. The cdylib exposes 25 entry points covering containers, images, networks, volumes, exec, logs, and prune. The returned <code>CString</code> is freed via the cdylib-exported <code>stryke_free_cstring</code>, wired automatically by <code>rust_ffi::load_cdylib</code>.</p>
+      <p>JSON in / JSON out across the FFI boundary. Each <code>Docker::*</code> wrapper serializes its args to a JSON dict and calls the matching <code>docker__*</code> symbol resolved out of <code>libstryke_docker.{dylib,so}</code>; the cdylib returns a JSON <code>CString</code> the wrapper parses. The exports cover containers, images, networks, volumes, exec, logs, and prune, plus daemon-free helpers (<code>docker__parse_image_ref</code>, <code>docker__valid_container_name</code>, <code>docker__parse_port_spec</code>); the authoritative list is <code>[ffi].exports</code> in <code>stryke.toml</code>. The returned <code>CString</code> is freed via the cdylib-exported <code>stryke_free_cstring</code>, wired automatically by <code>rust_ffi::load_cdylib</code>.</p>
 <pre># request shape (built by the .stk wrapper)
 {"verb": "&lt;op&gt;", "...": ...}
 

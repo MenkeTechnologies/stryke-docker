@@ -67,4 +67,28 @@ if ($alive) {
     assert_ok 1, "cleanup (rm + network_rm + volume_rm) completed"
 }
 
+# ── pure helpers (no daemon — always run) ────────────────────────────
+# `\@` escapes the at-sign so stryke does not array-interpolate the digest.
+val $r = Docker::parse_image_ref("registry.example.com:5000/team/app:1.2.3\@sha256:abc123")
+assert_eq $r->{registry},   "registry.example.com:5000", "parse_image_ref: registry"
+assert_eq $r->{namespace},  "team",                      "parse_image_ref: namespace"
+assert_eq $r->{repository}, "app",                       "parse_image_ref: repository"
+assert_eq $r->{tag},        "1.2.3",                     "parse_image_ref: tag"
+assert_eq $r->{digest},     "sha256:abc123",             "parse_image_ref: digest"
+
+val $short = Docker::parse_image_ref("nginx")
+assert_eq $short->{tag}, "latest", "parse_image_ref: short form defaults to latest"
+assert_ok !defined($short->{registry}), "parse_image_ref: no registry for short form"
+
+assert_eq Docker::valid_container_name("web-1.api_v2"), 1, "valid_container_name: legal"
+assert_eq Docker::valid_container_name("_bad"), 0,         "valid_container_name: leading underscore rejected"
+assert_eq Docker::valid_container_name("has space"), 0,    "valid_container_name: space rejected"
+
+val $p = Docker::parse_port_spec("127.0.0.1:8080:80/tcp")
+assert_eq $p->{host_ip},        "127.0.0.1", "parse_port_spec: host_ip"
+assert_eq $p->{host_port},      "8080",      "parse_port_spec: host_port"
+assert_eq $p->{container_port}, "80",        "parse_port_spec: container_port"
+assert_eq $p->{protocol},       "tcp",       "parse_port_spec: protocol"
+assert_eq Docker::parse_port_spec("53/udp")->{protocol}, "udp", "parse_port_spec: udp default-less"
+
 test_run

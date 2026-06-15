@@ -685,6 +685,130 @@ pub unsafe extern "C" fn stryke_free_cstring(p: *mut c_char) {
     drop(CString::from_raw(p));
 }
 
+// ── pure helpers (no daemon) ─────────────────────────────────────────────────
+
+/// Parse a Docker image reference `[registry[:port]/]name[:tag][@digest]` into
+/// its parts. The first path component is the registry only if it looks like a
+/// host (has `.`/`:` or is `localhost`). Tag defaults to `latest` when neither
+/// tag nor digest is present. Pure — contacts no registry.
+fn op_parse_image_ref(opts: Value) -> Result<Value> {
+    let r = opts
+        .get("ref")
+        .or_else(|| opts.get("image"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing ref"))?;
+    if r.is_empty() {
+        return Err(anyhow!("empty image reference"));
+    }
+    let (name_tag, digest) = match r.split_once('@') {
+        Some((nt, d)) => (nt, Some(d.to_string())),
+        None => (r, None),
+    };
+    // A `:` is a tag separator only when it sits after the last `/` (registries
+    // carry `:port` before the path).
+    let search_from = name_tag.rfind('/').map(|i| i + 1).unwrap_or(0);
+    let (path, tag) = match name_tag[search_from..].rfind(':') {
+        Some(rel) => {
+            let colon = search_from + rel;
+            (&name_tag[..colon], Some(name_tag[colon + 1..].to_string()))
+        }
+        None => (name_tag, None),
+    };
+    let comps: Vec<&str> = path.split('/').collect();
+    let has_registry = comps.len() > 1
+        && (comps[0].contains('.') || comps[0].contains(':') || comps[0] == "localhost");
+    let registry = if has_registry {
+        Some(comps[0].to_string())
+    } else {
+        None
+    };
+    let path_comps: &[&str] = if has_registry {
+        &comps[1..]
+    } else {
+        &comps[..]
+    };
+    let repository = path_comps.last().copied().unwrap_or("").to_string();
+    let namespace = if path_comps.len() > 1 {
+        Some(path_comps[..path_comps.len() - 1].join("/"))
+    } else {
+        None
+    };
+    let tag_out = match (&tag, &digest) {
+        (Some(t), _) => Some(t.clone()),
+        (None, None) => Some("latest".to_string()),
+        (None, Some(_)) => None,
+    };
+    Ok(json!({
+        "registry": registry,
+        "namespace": namespace,
+        "repository": repository,
+        "tag": tag_out,
+        "digest": digest,
+        "path": path,
+    }))
+}
+
+/// Validate a Docker container/volume/network name against the daemon rule
+/// `/?[a-zA-Z0-9][a-zA-Z0-9_.-]+` (optional leading slash, first char
+/// alphanumeric, length ≥ 2). Pure.
+fn op_valid_container_name(opts: Value) -> Result<Value> {
+    let name = opts
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing name"))?;
+    let n = name.strip_prefix('/').unwrap_or(name);
+    let valid = n.len() >= 2
+        && n.as_bytes()[0].is_ascii_alphanumeric()
+        && n.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-');
+    Ok(json!({"name": name, "valid": valid}))
+}
+
+/// Parse a `-p` port spec `[host_ip:][host_port:]container_port[/proto]` into
+/// `{host_ip, host_port, container_port, protocol}` (protocol default `tcp`).
+/// IPv6 host literals must be bracketed (`[::1]:8080:80`). Pure.
+fn op_parse_port_spec(opts: Value) -> Result<Value> {
+    let spec = opts
+        .get("spec")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing spec"))?;
+    let (addr, proto) = match spec.rsplit_once('/') {
+        Some((a, p)) if matches!(p, "tcp" | "udp" | "sctp") => (a, p.to_string()),
+        _ => (spec, "tcp".to_string()),
+    };
+    // Bracketed IPv6 host: [::1]:hostPort:containerPort
+    let (host_ip, remainder): (Option<String>, String) =
+        if let Some(stripped) = addr.strip_prefix('[') {
+            let end = stripped
+                .find(']')
+                .ok_or_else(|| anyhow!("unterminated IPv6 literal in `{spec}`"))?;
+            let ip = stripped[..end].to_string();
+            let rest = stripped[end + 1..].trim_start_matches(':').to_string();
+            (Some(ip), rest)
+        } else {
+            (None, addr.to_string())
+        };
+    let parts: Vec<&str> = remainder.split(':').collect();
+    let (ip2, host_port, container_port) = match (host_ip.is_some(), parts.as_slice()) {
+        (true, [c]) => (host_ip.clone(), None, *c),
+        (true, [hp, c]) => (host_ip.clone(), Some(*hp), *c),
+        (false, [c]) => (None, None, *c),
+        (false, [hp, c]) => (None, Some(*hp), *c),
+        (false, [ip, hp, c]) => (Some(ip.to_string()), Some(*hp), *c),
+        _ => return Err(anyhow!("invalid port spec `{spec}`")),
+    };
+    if container_port.is_empty() {
+        return Err(anyhow!("missing container port in `{spec}`"));
+    }
+    let host_port = host_port.filter(|p| !p.is_empty());
+    Ok(json!({
+        "host_ip": ip2,
+        "host_port": host_port,
+        "container_port": container_port,
+        "protocol": proto,
+    }))
+}
+
 // ── exports ─────────────────────────────────────────────────────────────────
 
 #[no_mangle]
@@ -887,6 +1011,21 @@ pub extern "C" fn docker__volume_inspect(args: *const c_char) -> *const c_char {
 #[no_mangle]
 pub extern "C" fn docker__network_inspect(args: *const c_char) -> *const c_char {
     ffi_call_async(args, op_network_inspect)
+}
+
+#[no_mangle]
+pub extern "C" fn docker__parse_image_ref(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_parse_image_ref(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__valid_container_name(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_valid_container_name(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__parse_port_spec(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_parse_port_spec(opts) })
 }
 
 #[cfg(test)]
@@ -1275,5 +1414,104 @@ mod tests {
             v["error"].as_str().unwrap().contains("missing name"),
             "rename must require the new name; got {v}"
         );
+    }
+
+    // ── pure helpers (no daemon) ─────────────────────────────────────────────
+
+    #[test]
+    fn parse_image_ref_full_registry_namespace_tag_digest() {
+        let v = op_parse_image_ref(json!({
+            "ref": "registry.example.com:5000/team/app:1.2.3@sha256:abc123"
+        }))
+        .unwrap();
+        assert_eq!(v["registry"], json!("registry.example.com:5000"));
+        assert_eq!(v["namespace"], json!("team"));
+        assert_eq!(v["repository"], json!("app"));
+        assert_eq!(v["tag"], json!("1.2.3"));
+        assert_eq!(v["digest"], json!("sha256:abc123"));
+    }
+
+    #[test]
+    fn parse_image_ref_docker_hub_short_form_defaults_latest() {
+        // `nginx` → no registry, no namespace, tag latest.
+        let v = op_parse_image_ref(json!({"ref": "nginx"})).unwrap();
+        assert_eq!(v["registry"], Value::Null);
+        assert_eq!(v["namespace"], Value::Null);
+        assert_eq!(v["repository"], json!("nginx"));
+        assert_eq!(v["tag"], json!("latest"));
+        // `library/nginx:1.25` → namespace library, explicit tag, still no registry.
+        let v2 = op_parse_image_ref(json!({"ref": "library/nginx:1.25"})).unwrap();
+        assert_eq!(
+            v2["registry"],
+            Value::Null,
+            "`library` is a namespace, not a registry"
+        );
+        assert_eq!(v2["namespace"], json!("library"));
+        assert_eq!(v2["tag"], json!("1.25"));
+    }
+
+    #[test]
+    fn parse_image_ref_digest_only_has_null_tag() {
+        let v = op_parse_image_ref(json!({"ref": "nginx@sha256:deadbeef"})).unwrap();
+        assert_eq!(
+            v["tag"],
+            Value::Null,
+            "digest-pinned ref has no default tag"
+        );
+        assert_eq!(v["digest"], json!("sha256:deadbeef"));
+    }
+
+    #[test]
+    fn valid_container_name_matches_daemon_regex() {
+        assert_eq!(
+            op_valid_container_name(json!({"name": "web-1.api_v2"})).unwrap()["valid"],
+            json!(true)
+        );
+        // Leading slash (the inspect form) is allowed.
+        assert_eq!(
+            op_valid_container_name(json!({"name": "/web"})).unwrap()["valid"],
+            json!(true)
+        );
+        // First char must be alphanumeric; length >= 2.
+        assert_eq!(
+            op_valid_container_name(json!({"name": "_bad"})).unwrap()["valid"],
+            json!(false)
+        );
+        assert_eq!(
+            op_valid_container_name(json!({"name": "has space"})).unwrap()["valid"],
+            json!(false)
+        );
+        assert_eq!(
+            op_valid_container_name(json!({"name": "a"})).unwrap()["valid"],
+            json!(false),
+            "single char fails the daemon's length-2 rule"
+        );
+    }
+
+    #[test]
+    fn parse_port_spec_handles_the_p_flag_forms() {
+        let full = op_parse_port_spec(json!({"spec": "127.0.0.1:8080:80/tcp"})).unwrap();
+        assert_eq!(full["host_ip"], json!("127.0.0.1"));
+        assert_eq!(full["host_port"], json!("8080"));
+        assert_eq!(full["container_port"], json!("80"));
+        assert_eq!(full["protocol"], json!("tcp"));
+
+        let hp = op_parse_port_spec(json!({"spec": "8080:80"})).unwrap();
+        assert_eq!(hp["host_ip"], Value::Null);
+        assert_eq!(hp["host_port"], json!("8080"));
+        assert_eq!(hp["protocol"], json!("tcp"), "protocol defaults to tcp");
+
+        let bare = op_parse_port_spec(json!({"spec": "53/udp"})).unwrap();
+        assert_eq!(bare["container_port"], json!("53"));
+        assert_eq!(bare["host_port"], Value::Null);
+        assert_eq!(bare["protocol"], json!("udp"));
+    }
+
+    #[test]
+    fn parse_port_spec_handles_bracketed_ipv6() {
+        let v = op_parse_port_spec(json!({"spec": "[::1]:8080:80"})).unwrap();
+        assert_eq!(v["host_ip"], json!("::1"));
+        assert_eq!(v["host_port"], json!("8080"));
+        assert_eq!(v["container_port"], json!("80"));
     }
 }
