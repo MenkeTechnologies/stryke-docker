@@ -179,6 +179,7 @@ Docker::parse_image_ref($ref)      → { registry, namespace, repository, tag, d
 Docker::build_image_ref(%opts)     → $ref     # parts → [registry/][namespace/]repo[:tag][@digest]; inverse of parse_image_ref
 Docker::valid_container_name($n)   → 1 | ""    # /?[a-zA-Z0-9][a-zA-Z0-9_.-]+
 Docker::parse_port_spec($spec)     → { host_ip, host_port, container_port, protocol }
+Docker::build_port_spec(%opts)     → $spec     # parts → [ip:][host:]container[/proto]; inverse of parse_port_spec
 Docker::parse_mount($spec)         → { type, source, target, readonly, options }   # -v src:dst[:opts]
 ```
 
@@ -226,6 +227,7 @@ cdylib is dlopened in-process on first `use Docker` (via stryke's
 containers, images, networks, volumes, exec, logs, and prune, plus
 daemon-free helpers (`docker__parse_image_ref`, `docker__build_image_ref`,
 `docker__valid_container_name`, `docker__parse_port_spec`,
+`docker__build_port_spec`,
 `docker__parse_mount`). The
 authoritative list is `[ffi].exports` in `stryke.toml`.
 

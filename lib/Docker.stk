@@ -378,6 +378,14 @@ fn Docker::parse_port_spec ($spec) {
     Docker::_decode("parse_port_spec", docker__parse_port_spec(to_json({ spec => $spec })))
 }
 
+## Build a -p port spec from parts — inverse of parse_port_spec. %opts:
+## container_port (required), host_port, host_ip (IPv6 literals auto-bracketed),
+## protocol (default tcp; only emitted as /proto when not tcp). Returns the spec
+## string under `spec`.
+fn Docker::build_port_spec (%opts) {
+    Docker::_decode("build_port_spec", docker__build_port_spec(to_json(\%opts)))->{spec}
+}
+
 ## Parse a -v mount spec "src:dst[:opts]" into a hashref
 ## { type, source, target, readonly, options }. type is "bind" when source is a
 ## host path (/, ., ~), "volume" for a named source, "anonymous" for a lone dst.

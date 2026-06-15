@@ -843,6 +843,53 @@ fn op_parse_port_spec(opts: Value) -> Result<Value> {
     }))
 }
 
+/// Build a `docker run -p` port spec from parts — the inverse of
+/// `parse_port_spec`. opts: `container_port` (required, string or number),
+/// optional `host_port`, `host_ip` (bracketed automatically when it is an IPv6
+/// literal), and `protocol` (default `tcp`; only emitted as `/proto` when not
+/// tcp, mirroring the minimal form parse accepts). Pure.
+fn op_build_port_spec(opts: Value) -> Result<Value> {
+    // Accept a port as a string or a JSON number.
+    let port = |k: &str| -> Option<String> {
+        match opts.get(k) {
+            Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+            Some(Value::Number(n)) => Some(n.to_string()),
+            _ => None,
+        }
+    };
+    let container_port = port("container_port").ok_or_else(|| anyhow!("missing container_port"))?;
+    let host_port = port("host_port");
+    let host_ip = opts
+        .get("host_ip")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty());
+    let mut spec = String::new();
+    if let Some(ip) = host_ip {
+        // IPv6 literals (containing `:`) must be bracketed.
+        if ip.contains(':') {
+            spec.push_str(&format!("[{ip}]:"));
+        } else {
+            spec.push_str(&format!("{ip}:"));
+        }
+        // An IP with no host port leaves the slot empty (`ip::container`).
+        match &host_port {
+            Some(hp) => spec.push_str(&format!("{hp}:")),
+            None => spec.push(':'),
+        }
+    } else if let Some(hp) = &host_port {
+        spec.push_str(&format!("{hp}:"));
+    }
+    spec.push_str(&container_port);
+    let proto = opts
+        .get("protocol")
+        .and_then(Value::as_str)
+        .unwrap_or("tcp");
+    if proto != "tcp" {
+        spec.push_str(&format!("/{proto}"));
+    }
+    Ok(json!({"spec": spec}))
+}
+
 /// Parse a `docker run -v` short mount spec into its parts. Supports
 /// `source:target[:opts]` where a `source` containing `/` (or `.`) is a bind
 /// mount and a bare name is a named volume; a lone `target` (`/data`) is an
@@ -1105,6 +1152,11 @@ pub extern "C" fn docker__valid_container_name(args: *const c_char) -> *const c_
 #[no_mangle]
 pub extern "C" fn docker__parse_port_spec(args: *const c_char) -> *const c_char {
     ffi_call_async(args, |opts| async move { op_parse_port_spec(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__build_port_spec(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_build_port_spec(opts) })
 }
 
 #[no_mangle]
@@ -1630,6 +1682,52 @@ mod tests {
         assert_eq!(v["host_ip"], json!("::1"));
         assert_eq!(v["host_port"], json!("8080"));
         assert_eq!(v["container_port"], json!("80"));
+    }
+
+    #[test]
+    fn build_port_spec_inverts_parse_port_spec() {
+        // container-only, host:container, and ip:host:container forms.
+        assert_eq!(
+            op_build_port_spec(json!({"container_port": 80})).unwrap()["spec"],
+            json!("80")
+        );
+        assert_eq!(
+            op_build_port_spec(json!({"host_port": 8080, "container_port": 80})).unwrap()["spec"],
+            json!("8080:80")
+        );
+        assert_eq!(
+            op_build_port_spec(
+                json!({"host_ip": "127.0.0.1", "host_port": 8080, "container_port": 80})
+            )
+            .unwrap()["spec"],
+            json!("127.0.0.1:8080:80")
+        );
+        // Non-tcp protocol appends /proto; ports accepted as strings too.
+        assert_eq!(
+            op_build_port_spec(
+                json!({"host_port": "53", "container_port": "53", "protocol": "udp"})
+            )
+            .unwrap()["spec"],
+            json!("53:53/udp")
+        );
+        // IPv6 host is bracketed; an IP without a host port leaves an empty slot.
+        assert_eq!(
+            op_build_port_spec(json!({"host_ip": "::1", "container_port": 80})).unwrap()["spec"],
+            json!("[::1]::80")
+        );
+        // Round-trip a full spec through parse.
+        let built = op_build_port_spec(json!({
+            "host_ip": "127.0.0.1", "host_port": 8080, "container_port": 80
+        }))
+        .unwrap()["spec"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let back = op_parse_port_spec(json!({"spec": built})).unwrap();
+        assert_eq!(back["host_ip"], json!("127.0.0.1"));
+        assert_eq!(back["host_port"], json!("8080"));
+        assert_eq!(back["container_port"], json!("80"));
+        assert!(op_build_port_spec(json!({"host_port": 8080})).is_err());
     }
 
     #[test]

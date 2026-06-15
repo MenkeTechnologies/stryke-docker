@@ -97,6 +97,13 @@ assert_eq $p->{container_port}, "80",        "parse_port_spec: container_port"
 assert_eq $p->{protocol},       "tcp",       "parse_port_spec: protocol"
 assert_eq Docker::parse_port_spec("53/udp")->{protocol}, "udp", "parse_port_spec: udp default-less"
 
+# build_port_spec: inverse of parse_port_spec.
+assert_eq Docker::build_port_spec(host_ip => "127.0.0.1", host_port => 8080, container_port => 80), "127.0.0.1:8080:80", "build_port_spec: ip:host:container"
+assert_eq Docker::build_port_spec(host_port => 8080, container_port => 80), "8080:80", "build_port_spec: host:container"
+assert_eq Docker::build_port_spec(container_port => 80), "80", "build_port_spec: container only"
+assert_eq Docker::build_port_spec(host_port => 53, container_port => 53, protocol => "udp"), "53:53/udp", "build_port_spec: non-tcp appends /proto"
+assert_eq Docker::parse_port_spec(Docker::build_port_spec(host_ip => "127.0.0.1", host_port => 8080, container_port => 80))->{host_port}, "8080", "build_port_spec → parse_port_spec round-trips"
+
 # parse_mount: bind (host path) read-only, named volume, anonymous.
 val $bind = Docker::parse_mount("/data:/var/lib/data:ro")
 assert_eq $bind->{type},     "bind",          "parse_mount: host path is a bind"
