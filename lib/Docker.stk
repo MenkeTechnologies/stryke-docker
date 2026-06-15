@@ -371,3 +371,11 @@ fn Docker::parse_port_spec ($spec) {
     Docker::_decode("parse_port_spec", docker__parse_port_spec(to_json({ spec => $spec })))
 }
 
+## Parse a -v mount spec "src:dst[:opts]" into a hashref
+## { type, source, target, readonly, options }. type is "bind" when source is a
+## host path (/, ., ~), "volume" for a named source, "anonymous" for a lone dst.
+## opts is the comma list after the second colon; "ro" sets readonly.
+fn Docker::parse_mount ($spec) {
+    Docker::_decode("parse_mount", docker__parse_mount(to_json({ spec => $spec })))
+}
+

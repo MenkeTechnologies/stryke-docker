@@ -809,6 +809,46 @@ fn op_parse_port_spec(opts: Value) -> Result<Value> {
     }))
 }
 
+/// Parse a `docker run -v` short mount spec into its parts. Supports
+/// `source:target[:opts]` where a `source` containing `/` (or `.`) is a bind
+/// mount and a bare name is a named volume; a lone `target` (`/data`) is an
+/// anonymous volume. `opts` is the comma list after the second colon (`ro`,
+/// `rw`, `z`, `cached`, …) — `ro` sets `readonly`. IPv6 has no bearing here, but
+/// Windows-style `C:\` sources are rejected (use `--mount` for those). Pure.
+fn op_parse_mount(opts: Value) -> Result<Value> {
+    let spec = opts
+        .get("spec")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing spec"))?;
+    let parts: Vec<&str> = spec.split(':').collect();
+    let (source, target, mount_opts): (Option<&str>, &str, &str) = match parts.as_slice() {
+        // Anonymous volume: just an in-container path.
+        [t] => (None, *t, ""),
+        [s, t] => (Some(*s), *t, ""),
+        [s, t, o] => (Some(*s), *t, *o),
+        _ => return Err(anyhow!("invalid mount spec `{spec}` (want src:dst[:opts])")),
+    };
+    if target.is_empty() {
+        return Err(anyhow!("mount spec missing container path: `{spec}`"));
+    }
+    // A bind mount sources from a host path (absolute, relative `.`/`..`, or
+    // `~`); anything else naming a source is a named volume.
+    let kind = match source {
+        None => "anonymous",
+        Some(s) if s.starts_with('/') || s.starts_with('.') || s.starts_with('~') => "bind",
+        Some(_) => "volume",
+    };
+    let opt_list: Vec<&str> = mount_opts.split(',').filter(|o| !o.is_empty()).collect();
+    let readonly = opt_list.contains(&"ro");
+    Ok(json!({
+        "type": kind,
+        "source": source,
+        "target": target,
+        "readonly": readonly,
+        "options": opt_list,
+    }))
+}
+
 // ── exports ─────────────────────────────────────────────────────────────────
 
 #[no_mangle]
@@ -1026,6 +1066,11 @@ pub extern "C" fn docker__valid_container_name(args: *const c_char) -> *const c_
 #[no_mangle]
 pub extern "C" fn docker__parse_port_spec(args: *const c_char) -> *const c_char {
     ffi_call_async(args, |opts| async move { op_parse_port_spec(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__parse_mount(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_parse_mount(opts) })
 }
 
 #[cfg(test)]
@@ -1513,5 +1558,33 @@ mod tests {
         assert_eq!(v["host_ip"], json!("::1"));
         assert_eq!(v["host_port"], json!("8080"));
         assert_eq!(v["container_port"], json!("80"));
+    }
+
+    #[test]
+    fn parse_mount_classifies_bind_volume_anonymous() {
+        // Host path → bind, with read-only option.
+        let bind = op_parse_mount(json!({"spec": "/data:/var/lib/data:ro"})).unwrap();
+        assert_eq!(bind["type"], json!("bind"));
+        assert_eq!(bind["source"], json!("/data"));
+        assert_eq!(bind["target"], json!("/var/lib/data"));
+        assert_eq!(bind["readonly"], json!(true));
+        assert_eq!(bind["options"], json!(["ro"]));
+        // Named volume → volume, defaults read-write.
+        let vol = op_parse_mount(json!({"spec": "pgdata:/var/lib/postgresql/data"})).unwrap();
+        assert_eq!(vol["type"], json!("volume"));
+        assert_eq!(vol["source"], json!("pgdata"));
+        assert_eq!(vol["readonly"], json!(false));
+        // Lone container path → anonymous volume, null source.
+        let anon = op_parse_mount(json!({"spec": "/cache"})).unwrap();
+        assert_eq!(anon["type"], json!("anonymous"));
+        assert_eq!(anon["source"], Value::Null);
+        assert_eq!(anon["target"], json!("/cache"));
+        // Multi-option list is preserved in order.
+        let multi = op_parse_mount(json!({"spec": "./src:/app:ro,z"})).unwrap();
+        assert_eq!(multi["type"], json!("bind"));
+        assert_eq!(multi["options"], json!(["ro", "z"]));
+        // Empty target and over-long specs are rejected.
+        assert!(op_parse_mount(json!({"spec": "/data:"})).is_err());
+        assert!(op_parse_mount(json!({"spec": "a:b:c:d"})).is_err());
     }
 }

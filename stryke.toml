@@ -1,6 +1,6 @@
 [package]
 name = "stryke-docker"
-version = "0.3.0"
+version = "0.4.0"
 description = "Docker client for stryke. Containers + images + networks + volumes against the local daemon or any DOCKER_HOST. cdylib loaded in-process — persistent bollard::Docker client + tokio runtime across calls."
 authors = ["MenkeTechnologies"]
 license = "MIT"
@@ -54,6 +54,7 @@ exports = [
     "docker__parse_image_ref",
     "docker__valid_container_name",
     "docker__parse_port_spec",
+    "docker__parse_mount",
 ]
 
 [scripts]

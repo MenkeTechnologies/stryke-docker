@@ -178,7 +178,13 @@ Docker::network_inspect $network, %opts → \%info        # driver, subnet, conn
 Docker::parse_image_ref($ref)      → { registry, namespace, repository, tag, digest, path }
 Docker::valid_container_name($n)   → 1 | ""    # /?[a-zA-Z0-9][a-zA-Z0-9_.-]+
 Docker::parse_port_spec($spec)     → { host_ip, host_port, container_port, protocol }
+Docker::parse_mount($spec)         → { type, source, target, readonly, options }   # -v src:dst[:opts]
 ```
+
+`parse_mount` classifies a `-v` short mount: a host-path source (`/`, `.`, `~`)
+is a `bind`, a bare name is a `volume`, and a lone container path is an
+`anonymous` volume. The comma list after the second colon becomes `options`,
+and an `ro` entry sets `readonly`.
 
 ### Images
 
@@ -218,7 +224,8 @@ cdylib is dlopened in-process on first `use Docker` (via stryke's
 `pkg::commands::try_load_ffi_for` resolver hook). Its exports cover
 containers, images, networks, volumes, exec, logs, and prune, plus
 daemon-free helpers (`docker__parse_image_ref`,
-`docker__valid_container_name`, `docker__parse_port_spec`). The
+`docker__valid_container_name`, `docker__parse_port_spec`,
+`docker__parse_mount`). The
 authoritative list is `[ffi].exports` in `stryke.toml`.
 
 **Persistent state:**

@@ -91,4 +91,17 @@ assert_eq $p->{container_port}, "80",        "parse_port_spec: container_port"
 assert_eq $p->{protocol},       "tcp",       "parse_port_spec: protocol"
 assert_eq Docker::parse_port_spec("53/udp")->{protocol}, "udp", "parse_port_spec: udp default-less"
 
+# parse_mount: bind (host path) read-only, named volume, anonymous.
+val $bind = Docker::parse_mount("/data:/var/lib/data:ro")
+assert_eq $bind->{type},     "bind",          "parse_mount: host path is a bind"
+assert_eq $bind->{source},   "/data",         "parse_mount: bind source"
+assert_eq $bind->{target},   "/var/lib/data", "parse_mount: bind target"
+assert_eq $bind->{readonly}, 1,               "parse_mount: ro sets readonly"
+val $vol = Docker::parse_mount("pgdata:/var/lib/postgresql/data")
+assert_eq $vol->{type},     "volume", "parse_mount: named source is a volume"
+assert_eq $vol->{readonly}, 0,        "parse_mount: defaults read-write"
+val $anon = Docker::parse_mount("/cache")
+assert_eq $anon->{type},   "anonymous", "parse_mount: lone path is anonymous"
+assert_ok !defined($anon->{source}),    "parse_mount: anonymous has no source"
+
 test_run
