@@ -748,6 +748,40 @@ fn op_parse_image_ref(opts: Value) -> Result<Value> {
     }))
 }
 
+/// Assemble an image reference from parts — the inverse of `parse_image_ref`.
+/// opts: `repository` (required), and optional `registry`, `namespace`, `tag`,
+/// `digest`. Produces `[registry/][namespace/]repository[:tag][@digest]`. Pure.
+fn op_build_image_ref(opts: Value) -> Result<Value> {
+    let repository = opts
+        .get("repository")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("missing repository"))?;
+    let opt = |k: &str| {
+        opts.get(k)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+    };
+    let mut path_parts: Vec<&str> = Vec::new();
+    if let Some(reg) = opt("registry") {
+        path_parts.push(reg);
+    }
+    if let Some(ns) = opt("namespace") {
+        path_parts.push(ns);
+    }
+    path_parts.push(repository);
+    let mut out = path_parts.join("/");
+    if let Some(tag) = opt("tag") {
+        out.push(':');
+        out.push_str(tag);
+    }
+    if let Some(digest) = opt("digest") {
+        out.push('@');
+        out.push_str(digest);
+    }
+    Ok(json!({"ref": out}))
+}
+
 /// Validate a Docker container/volume/network name against the daemon rule
 /// `/?[a-zA-Z0-9][a-zA-Z0-9_.-]+` (optional leading slash, first char
 /// alphanumeric, length ≥ 2). Pure.
@@ -1056,6 +1090,11 @@ pub extern "C" fn docker__network_inspect(args: *const c_char) -> *const c_char 
 #[no_mangle]
 pub extern "C" fn docker__parse_image_ref(args: *const c_char) -> *const c_char {
     ffi_call_async(args, |opts| async move { op_parse_image_ref(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__build_image_ref(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_build_image_ref(opts) })
 }
 
 #[no_mangle]
@@ -1474,6 +1513,39 @@ mod tests {
         assert_eq!(v["repository"], json!("app"));
         assert_eq!(v["tag"], json!("1.2.3"));
         assert_eq!(v["digest"], json!("sha256:abc123"));
+    }
+
+    #[test]
+    fn build_image_ref_inverts_parse_image_ref() {
+        // Full ref → parts → ref reproduces the original string.
+        let orig = "registry.example.com:5000/team/app:1.2.3@sha256:abc123";
+        let p = op_parse_image_ref(json!({"ref": orig})).unwrap();
+        let built = op_build_image_ref(json!({
+            "registry": p["registry"], "namespace": p["namespace"],
+            "repository": p["repository"], "tag": p["tag"], "digest": p["digest"],
+        }))
+        .unwrap();
+        assert_eq!(built["ref"], json!(orig));
+        // Repository only → bare name (no separators).
+        assert_eq!(
+            op_build_image_ref(json!({"repository": "nginx"})).unwrap()["ref"],
+            json!("nginx")
+        );
+        // Namespace + tag, no registry.
+        assert_eq!(
+            op_build_image_ref(
+                json!({"namespace": "library", "repository": "nginx", "tag": "1.25"})
+            )
+            .unwrap()["ref"],
+            json!("library/nginx:1.25")
+        );
+        // Digest without tag (the `@`-only form).
+        assert_eq!(
+            op_build_image_ref(json!({"repository": "app", "digest": "sha256:deadbeef"})).unwrap()
+                ["ref"],
+            json!("app@sha256:deadbeef")
+        );
+        assert!(op_build_image_ref(json!({})).is_err());
     }
 
     #[test]

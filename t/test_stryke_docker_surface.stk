@@ -69,6 +69,7 @@ assert_ok exists &Docker::network_inspect, "Docker::network_inspect exists"
 
 # ── pure parse helpers ──
 assert_ok exists &Docker::parse_image_ref, "Docker::parse_image_ref exists"
+assert_ok exists &Docker::build_image_ref, "Docker::build_image_ref exists"
 assert_ok exists &Docker::valid_container_name, "Docker::valid_container_name exists"
 assert_ok exists &Docker::parse_port_spec, "Docker::parse_port_spec exists"
 assert_ok exists &Docker::parse_mount, "Docker::parse_mount exists"

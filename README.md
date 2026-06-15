@@ -176,6 +176,7 @@ Docker::network_inspect $network, %opts → \%info        # driver, subnet, conn
 
 ```stryke
 Docker::parse_image_ref($ref)      → { registry, namespace, repository, tag, digest, path }
+Docker::build_image_ref(%opts)     → $ref     # parts → [registry/][namespace/]repo[:tag][@digest]; inverse of parse_image_ref
 Docker::valid_container_name($n)   → 1 | ""    # /?[a-zA-Z0-9][a-zA-Z0-9_.-]+
 Docker::parse_port_spec($spec)     → { host_ip, host_port, container_port, protocol }
 Docker::parse_mount($spec)         → { type, source, target, readonly, options }   # -v src:dst[:opts]
@@ -223,7 +224,7 @@ Each `Docker::*` wrapper builds a JSON args dict and calls a sibling
 cdylib is dlopened in-process on first `use Docker` (via stryke's
 `pkg::commands::try_load_ffi_for` resolver hook). Its exports cover
 containers, images, networks, volumes, exec, logs, and prune, plus
-daemon-free helpers (`docker__parse_image_ref`,
+daemon-free helpers (`docker__parse_image_ref`, `docker__build_image_ref`,
 `docker__valid_container_name`, `docker__parse_port_spec`,
 `docker__parse_mount`). The
 authoritative list is `[ffi].exports` in `stryke.toml`.

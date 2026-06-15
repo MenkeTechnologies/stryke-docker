@@ -80,6 +80,12 @@ val $short = Docker::parse_image_ref("nginx")
 assert_eq $short->{tag}, "latest", "parse_image_ref: short form defaults to latest"
 assert_ok !defined($short->{registry}), "parse_image_ref: no registry for short form"
 
+# build_image_ref: inverse of parse_image_ref (\@ escapes the literal @).
+assert_eq Docker::build_image_ref(registry => "registry.example.com:5000", namespace => "team", repository => "app", tag => "1.2.3", digest => "sha256:abc123"), "registry.example.com:5000/team/app:1.2.3\@sha256:abc123", "build_image_ref: full ref"
+assert_eq Docker::build_image_ref(repository => "nginx"), "nginx", "build_image_ref: bare repository"
+assert_eq Docker::build_image_ref(namespace => "library", repository => "nginx", tag => "1.25"), "library/nginx:1.25", "build_image_ref: namespace + tag"
+assert_dies fn { Docker::build_image_ref(tag => "x") }, "build_image_ref: missing repository errors"
+
 assert_eq Docker::valid_container_name("web-1.api_v2"), 1, "valid_container_name: legal"
 assert_eq Docker::valid_container_name("_bad"), 0,         "valid_container_name: leading underscore rejected"
 assert_eq Docker::valid_container_name("has space"), 0,    "valid_container_name: space rejected"

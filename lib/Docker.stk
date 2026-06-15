@@ -357,6 +357,13 @@ fn Docker::parse_image_ref ($ref) {
     Docker::_decode("parse_image_ref", docker__parse_image_ref(to_json({ ref => $ref })))
 }
 
+## Assemble an image reference from parts — inverse of parse_image_ref. %opts:
+## repository (required), registry, namespace, tag, digest. Produces
+## "[registry/][namespace/]repository[:tag][@digest]". Returns the ref string.
+fn Docker::build_image_ref (%opts) {
+    Docker::_decode("build_image_ref", docker__build_image_ref(to_json(\%opts)))->{ref}
+}
+
 ## True if $name is a valid Docker container/volume/network name
 ## (/?[a-zA-Z0-9][a-zA-Z0-9_.-]+).
 fn Docker::valid_container_name ($name) {
