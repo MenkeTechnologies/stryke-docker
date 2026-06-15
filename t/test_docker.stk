@@ -90,6 +90,17 @@ assert_eq Docker::valid_container_name("web-1.api_v2"), 1, "valid_container_name
 assert_eq Docker::valid_container_name("_bad"), 0,         "valid_container_name: leading underscore rejected"
 assert_eq Docker::valid_container_name("has space"), 0,    "valid_container_name: space rejected"
 
+# valid_image_tag: docker tag rules.
+assert_ok Docker::valid_image_tag("v1.2.3")->{valid},        "valid_image_tag: dotted version"
+assert_ok Docker::valid_image_tag("RELEASE_2025")->{valid},  "valid_image_tag: uppercase + underscore allowed"
+assert_ok Docker::valid_image_tag("_lead")->{valid},         "valid_image_tag: underscore may lead"
+assert_eq Docker::valid_image_tag(".dotstart")->{valid}, 0,  "valid_image_tag: may not start with a period"
+assert_eq Docker::valid_image_tag("-dashstart")->{valid}, 0, "valid_image_tag: may not start with a dash"
+assert_eq Docker::valid_image_tag("a/b")->{valid}, 0,        "valid_image_tag: slash rejected"
+val $lt = Docker::valid_image_tag("a" x 129)
+assert_eq $lt->{valid}, 0,                                   "valid_image_tag: over 128 chars fails"
+assert_match qr/128/, $lt->{reason},                         "valid_image_tag: reason names the limit"
+
 val $p = Docker::parse_port_spec("127.0.0.1:8080:80/tcp")
 assert_eq $p->{host_ip},        "127.0.0.1", "parse_port_spec: host_ip"
 assert_eq $p->{host_port},      "8080",      "parse_port_spec: host_port"

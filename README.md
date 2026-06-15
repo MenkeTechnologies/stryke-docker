@@ -178,6 +178,7 @@ Docker::network_inspect $network, %opts → \%info        # driver, subnet, conn
 Docker::parse_image_ref($ref)      → { registry, namespace, repository, tag, digest, path }
 Docker::build_image_ref(%opts)     → $ref     # parts → [registry/][namespace/]repo[:tag][@digest]; inverse of parse_image_ref
 Docker::valid_container_name($n)   → 1 | ""    # /?[a-zA-Z0-9][a-zA-Z0-9_.-]+
+Docker::valid_image_tag($tag)      → { tag, valid, reason }   # docker tag rules: ASCII alnum/_/./-, ≤128, no leading . or -
 Docker::parse_port_spec($spec)     → { host_ip, host_port, container_port, protocol }
 Docker::build_port_spec(%opts)     → $spec     # parts → [ip:][host:]container[/proto]; inverse of parse_port_spec
 Docker::parse_mount($spec)         → { type, source, target, readonly, options }   # -v src:dst[:opts]

@@ -798,6 +798,32 @@ fn op_valid_container_name(opts: Value) -> Result<Value> {
     Ok(json!({"name": name, "valid": valid}))
 }
 
+/// Validate a Docker image tag per `docker tag`'s rules: valid ASCII of letters
+/// (any case), digits, `_`, `.`, and `-`; at most 128 characters; and it may not
+/// start with a `.` or a `-`. Returns `{tag, valid, reason}`. Pure.
+fn op_valid_image_tag(opts: Value) -> Result<Value> {
+    let tag = opts
+        .get("tag")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing tag"))?;
+    let bytes = tag.as_bytes();
+    let reason: Option<&str> = if tag.is_empty() {
+        Some("must not be empty")
+    } else if tag.len() > 128 {
+        Some("must be at most 128 characters")
+    } else if bytes[0] == b'.' || bytes[0] == b'-' {
+        Some("must not start with a period or a dash")
+    } else if !tag
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-')
+    {
+        Some("only ASCII letters, digits, '_', '.', and '-'")
+    } else {
+        None
+    };
+    Ok(json!({"tag": tag, "valid": reason.is_none(), "reason": reason}))
+}
+
 /// Parse a `-p` port spec `[host_ip:][host_port:]container_port[/proto]` into
 /// `{host_ip, host_port, container_port, protocol}` (protocol default `tcp`).
 /// IPv6 host literals must be bracketed (`[::1]:8080:80`). Pure.
@@ -1199,6 +1225,11 @@ pub extern "C" fn docker__build_image_ref(args: *const c_char) -> *const c_char 
 #[no_mangle]
 pub extern "C" fn docker__valid_container_name(args: *const c_char) -> *const c_char {
     ffi_call_async(args, |opts| async move { op_valid_container_name(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__valid_image_tag(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_valid_image_tag(opts) })
 }
 
 #[no_mangle]
@@ -1712,6 +1743,45 @@ mod tests {
             json!(false),
             "single char fails the daemon's length-2 rule"
         );
+    }
+
+    #[test]
+    fn valid_image_tag_follows_docker_tag_rules() {
+        let ok = |t: &str| {
+            op_valid_image_tag(json!({ "tag": t })).unwrap()["valid"]
+                .as_bool()
+                .unwrap()
+        };
+        // Common valid tags — case, digits, and the allowed punctuation.
+        assert!(ok("latest"));
+        assert!(ok("v1.2.3"));
+        assert!(ok("1.21-alpine"));
+        assert!(ok("RELEASE_2025"), "uppercase and underscore allowed");
+        assert!(
+            ok("_leading_underscore"),
+            "underscore may lead, unlike . or -"
+        );
+        // Rejections.
+        for (t, want) in [
+            ("", "empty"),
+            (".dotstart", "period or a dash"),
+            ("-dashstart", "period or a dash"),
+            ("has space", "ASCII letters"),
+            ("a/b", "ASCII letters"),
+        ] {
+            let r = op_valid_image_tag(json!({ "tag": t })).unwrap();
+            assert_eq!(r["valid"], json!(false), "{t} should be invalid");
+            assert!(
+                r["reason"].as_str().unwrap().contains(want),
+                "{t}: reason `{}` should mention `{want}`",
+                r["reason"]
+            );
+        }
+        // 128 is the max; 129 fails.
+        assert!(ok(&"a".repeat(128)));
+        let long = op_valid_image_tag(json!({"tag": "a".repeat(129)})).unwrap();
+        assert_eq!(long["valid"], json!(false));
+        assert!(long["reason"].as_str().unwrap().contains("128"));
     }
 
     #[test]

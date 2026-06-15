@@ -1,6 +1,6 @@
 [package]
 name = "stryke-docker"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 description = "Docker cdylib for the stryke `docker` package — dlopened in-process via stryke's FFI bridge"
 authors = ["MenkeTechnologies"]

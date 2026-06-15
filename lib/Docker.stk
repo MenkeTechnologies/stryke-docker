@@ -371,6 +371,13 @@ fn Docker::valid_container_name ($name) {
         docker__valid_container_name(to_json({ name => $name })))->{valid}
 }
 
+## Validate a Docker image tag (docker tag rules): ASCII letters/digits/_/./-,
+## <=128 chars, may not start with "." or "-". Returns a hashref { tag, valid,
+## reason } (reason undef when valid).
+fn Docker::valid_image_tag ($tag) {
+    Docker::_decode("valid_image_tag", docker__valid_image_tag(to_json({ tag => $tag })))
+}
+
 ## Parse a -p port spec "[host_ip:][host_port:]container_port[/proto]" into a
 ## hashref { host_ip, host_port, container_port, protocol }. IPv6 hosts must be
 ## bracketed.
