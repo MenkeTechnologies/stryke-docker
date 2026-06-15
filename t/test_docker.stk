@@ -117,4 +117,13 @@ val $anon = Docker::parse_mount("/cache")
 assert_eq $anon->{type},   "anonymous", "parse_mount: lone path is anonymous"
 assert_ok !defined($anon->{source}),    "parse_mount: anonymous has no source"
 
+# build_mount: inverse of parse_mount.
+assert_eq Docker::build_mount(source => "/data", target => "/var/lib/data", readonly => 1), "/data:/var/lib/data:ro", "build_mount: bind read-only"
+assert_eq Docker::build_mount(source => "pgdata", target => "/app"), "pgdata:/app", "build_mount: named volume"
+assert_eq Docker::build_mount(target => "/cache"), "/cache", "build_mount: anonymous volume (target only)"
+assert_eq Docker::build_mount(source => "./src", target => "/app", options => ["ro", "z"]), "./src:/app:ro,z", "build_mount: option list"
+# round-trips parse_mount.
+assert_eq Docker::build_mount(%{ Docker::parse_mount("/data:/var/lib/data:ro") }), "/data:/var/lib/data:ro", "build_mount: round-trips parse_mount"
+assert_dies fn { Docker::build_mount(target => "/cache", readonly => 1) }, "build_mount: options without a source error"
+
 test_run

@@ -930,6 +930,58 @@ fn op_parse_mount(opts: Value) -> Result<Value> {
     }))
 }
 
+/// Assemble a `-v` mount spec `src:dst[:opts]` from parts — the inverse of
+/// `parse_mount`. opts: `target` (required), `source` (optional — omit for an
+/// anonymous volume), `options` (array of strings), and a `readonly` flag that
+/// appends `ro` if not already listed. Anonymous mounts take no options, so
+/// options without a source is an error (the colon syntax can't express it).
+/// Returns `{spec}`. Pure.
+fn op_build_mount(opts: Value) -> Result<Value> {
+    let target = opts
+        .get("target")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("missing target"))?;
+    let source = opts
+        .get("source")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty());
+    let mut mount_opts: Vec<String> = opts
+        .get("options")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+    let readonly = match opts.get("readonly") {
+        Some(Value::Bool(b)) => *b,
+        Some(Value::Number(n)) => n.as_i64().is_some_and(|x| x != 0),
+        Some(Value::String(s)) => s == "1" || s == "true",
+        _ => false,
+    };
+    if readonly && !mount_opts.iter().any(|o| o == "ro") {
+        mount_opts.push("ro".to_string());
+    }
+    if !mount_opts.is_empty() && source.is_none() {
+        return Err(anyhow!(
+            "mount options require a source (anonymous volumes take no options)"
+        ));
+    }
+    let mut spec = match source {
+        Some(s) => format!("{s}:{target}"),
+        None => target.to_string(),
+    };
+    if !mount_opts.is_empty() {
+        spec.push(':');
+        spec.push_str(&mount_opts.join(","));
+    }
+    Ok(json!({ "spec": spec }))
+}
+
 // ── exports ─────────────────────────────────────────────────────────────────
 
 #[no_mangle]
@@ -1162,6 +1214,11 @@ pub extern "C" fn docker__build_port_spec(args: *const c_char) -> *const c_char 
 #[no_mangle]
 pub extern "C" fn docker__parse_mount(args: *const c_char) -> *const c_char {
     ffi_call_async(args, |opts| async move { op_parse_mount(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__build_mount(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_build_mount(opts) })
 }
 
 #[cfg(test)]
@@ -1756,5 +1813,52 @@ mod tests {
         // Empty target and over-long specs are rejected.
         assert!(op_parse_mount(json!({"spec": "/data:"})).is_err());
         assert!(op_parse_mount(json!({"spec": "a:b:c:d"})).is_err());
+    }
+
+    #[test]
+    fn build_mount_inverts_parse_mount() {
+        // readonly flag appends `ro`.
+        assert_eq!(
+            op_build_mount(json!({"source": "/data", "target": "/var/lib/data", "readonly": true}))
+                .unwrap()["spec"],
+            json!("/data:/var/lib/data:ro")
+        );
+        // Named volume, read-write.
+        assert_eq!(
+            op_build_mount(json!({"source": "pgdata", "target": "/var/lib/postgresql/data"}))
+                .unwrap()["spec"],
+            json!("pgdata:/var/lib/postgresql/data")
+        );
+        // Anonymous volume — target only.
+        assert_eq!(
+            op_build_mount(json!({"target": "/cache"})).unwrap()["spec"],
+            json!("/cache")
+        );
+        // Explicit options list; `ro` from the flag is not duplicated.
+        assert_eq!(
+            op_build_mount(json!({"source": "./src", "target": "/app", "options": ["ro", "z"], "readonly": true}))
+                .unwrap()["spec"],
+            json!("./src:/app:ro,z")
+        );
+        // truthy readonly accepts a number (stryke serializes bools as 1).
+        assert_eq!(
+            op_build_mount(json!({"source": "/d", "target": "/t", "readonly": 1})).unwrap()["spec"],
+            json!("/d:/t:ro")
+        );
+        // Round-trips through parse_mount.
+        for spec in ["/data:/var/lib/data:ro", "pgdata:/app", "./src:/app:ro,z"] {
+            let p = op_parse_mount(json!({ "spec": spec })).unwrap();
+            let rebuilt = op_build_mount(json!({
+                "source": p["source"],
+                "target": p["target"],
+                "options": p["options"],
+            }))
+            .unwrap()["spec"]
+                .clone();
+            assert_eq!(rebuilt, json!(spec), "round-trip for {spec}");
+        }
+        // Options without a source can't be expressed; missing target errors.
+        assert!(op_build_mount(json!({"target": "/cache", "readonly": true})).is_err());
+        assert!(op_build_mount(json!({"source": "/d"})).is_err());
     }
 }

@@ -181,6 +181,7 @@ Docker::valid_container_name($n)   → 1 | ""    # /?[a-zA-Z0-9][a-zA-Z0-9_.-]+
 Docker::parse_port_spec($spec)     → { host_ip, host_port, container_port, protocol }
 Docker::build_port_spec(%opts)     → $spec     # parts → [ip:][host:]container[/proto]; inverse of parse_port_spec
 Docker::parse_mount($spec)         → { type, source, target, readonly, options }   # -v src:dst[:opts]
+Docker::build_mount(%opts)         → $spec     # { target, source?, options?, readonly? } → -v spec; inverse of parse_mount
 ```
 
 `parse_mount` classifies a `-v` short mount: a host-path source (`/`, `.`, `~`)

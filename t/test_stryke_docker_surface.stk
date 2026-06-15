@@ -74,5 +74,6 @@ assert_ok exists &Docker::valid_container_name, "Docker::valid_container_name ex
 assert_ok exists &Docker::parse_port_spec, "Docker::parse_port_spec exists"
 assert_ok exists &Docker::build_port_spec, "Docker::build_port_spec exists"
 assert_ok exists &Docker::parse_mount, "Docker::parse_mount exists"
+assert_ok exists &Docker::build_mount, "Docker::build_mount exists"
 
 test_run

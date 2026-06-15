@@ -394,3 +394,10 @@ fn Docker::parse_mount ($spec) {
     Docker::_decode("parse_mount", docker__parse_mount(to_json({ spec => $spec })))
 }
 
+## Assemble a -v mount spec "src:dst[:opts]" from parts — inverse of parse_mount.
+## %opts: target (required), source (omit for an anonymous volume), options
+## (arrayref), readonly (truthy appends "ro"). Returns the spec string.
+fn Docker::build_mount (%opts) {
+    Docker::_decode("build_mount", docker__build_mount(to_json(\%opts)))->{spec}
+}
+
