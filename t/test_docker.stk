@@ -235,4 +235,12 @@ assert_eq $plv->{variant}, "v8",         "parse_platform: variant when present"
 assert_dies fn { Docker::parse_platform("linux") },             "parse_platform: rejects a bare os"
 assert_dies fn { Docker::parse_platform("linux/arm/v7/extra") }, "parse_platform: rejects too many segments"
 
+# build_platform: inverse of parse_platform.
+assert_eq Docker::build_platform(+{ os => "linux", architecture => "amd64" })->{platform}, "linux/amd64", "build_platform: two-part os/arch"
+assert_eq Docker::build_platform(+{ os => "linux", architecture => "arm64", variant => "v8" })->{platform}, "linux/arm64/v8", "build_platform: three-part with variant"
+val $pp = Docker::parse_platform("linux/arm64/v8")
+assert_eq Docker::build_platform(+{ os => $pp->{os}, architecture => $pp->{architecture}, variant => $pp->{variant} })->{platform}, "linux/arm64/v8", "build_platform: round-trips parse_platform"
+assert_dies fn { Docker::build_platform(+{ architecture => "amd64" }) },                            "build_platform: rejects a missing os"
+assert_dies fn { Docker::build_platform(+{ os => "linux", architecture => "amd64", variant => "" }) }, "build_platform: rejects an empty variant"
+
 test_run

@@ -485,3 +485,13 @@ fn Docker::parse_platform ($platform) {
     Docker::_decode("parse_platform", docker__parse_platform(to_json({ platform => $platform })))
 }
 
+## Assemble a Docker/OCI --platform string from parts — the inverse of
+## parse_platform. With a variant it emits "os/arch/variant"; without one,
+## "os/arch". os and architecture are required and non-empty; an explicit
+## variant must be non-empty; none of the three may contain "/". $opts is a
+## hashref { os, architecture, variant? }. Returns a hashref
+## { platform, os, architecture, variant }.
+fn Docker::build_platform ($opts) {
+    Docker::_decode("build_platform", docker__build_platform(to_json($opts)))
+}
+

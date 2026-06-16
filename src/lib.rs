@@ -1459,6 +1459,49 @@ fn op_parse_platform(opts: Value) -> Result<Value> {
     Ok(json!({ "platform": s, "os": os, "architecture": arch, "variant": variant }))
 }
 
+/// Assemble a Docker/OCI `--platform` string from parts — the inverse of
+/// `parse_platform`, mirroring the other `build_`/`parse_` pairs. With a variant
+/// it emits `os/arch/variant` (`linux/arm64/v8`); without one, `os/arch`
+/// (`linux/amd64`). `os` and `architecture` (alias `arch`) are required and
+/// non-empty; an explicit `variant`, if given, must be non-empty; none of the
+/// three may contain a `/`. opts: `os`, `architecture`, optional `variant`.
+/// Returns `{platform, os, architecture, variant}`. Pure.
+fn op_build_platform(opts: Value) -> Result<Value> {
+    let os = opts
+        .get("os")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("missing os"))?;
+    let arch = opts
+        .get("architecture")
+        .or_else(|| opts.get("arch"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("missing architecture"))?;
+    let variant = opts.get("variant").and_then(Value::as_str);
+    if let Some(v) = variant {
+        if v.is_empty() {
+            return Err(anyhow!("platform variant must be non-empty when present"));
+        }
+    }
+    for (label, val) in [
+        ("os", Some(os)),
+        ("architecture", Some(arch)),
+        ("variant", variant),
+    ] {
+        if let Some(val) = val {
+            if val.contains('/') {
+                return Err(anyhow!("platform {label} may not contain `/`: `{val}`"));
+            }
+        }
+    }
+    let (spec, variant_out) = match variant {
+        Some(v) => (format!("{os}/{arch}/{v}"), json!(v)),
+        None => (format!("{os}/{arch}"), Value::Null),
+    };
+    Ok(json!({ "platform": spec, "os": os, "architecture": arch, "variant": variant_out }))
+}
+
 // ── exports ─────────────────────────────────────────────────────────────────
 
 #[no_mangle]
@@ -1736,6 +1779,11 @@ pub extern "C" fn docker__parse_restart_policy(args: *const c_char) -> *const c_
 #[no_mangle]
 pub extern "C" fn docker__parse_platform(args: *const c_char) -> *const c_char {
     ffi_call_async(args, |opts| async move { op_parse_platform(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__build_platform(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_build_platform(opts) })
 }
 
 #[no_mangle]
@@ -2657,6 +2705,41 @@ mod tests {
         assert!(op_parse_platform(json!({"platform": "/amd64"})).is_err());
         assert!(op_parse_platform(json!({"platform": "linux/arm64/"})).is_err());
         assert!(op_parse_platform(json!({})).is_err());
+    }
+
+    #[test]
+    fn build_platform_inverts_parse_platform() {
+        // Two-part form.
+        let b = op_build_platform(json!({"os": "linux", "architecture": "amd64"})).unwrap();
+        assert_eq!(b["platform"], json!("linux/amd64"));
+        assert_eq!(b["variant"], Value::Null);
+        // Three-part form, and the `arch` alias.
+        let v =
+            op_build_platform(json!({"os": "linux", "arch": "arm64", "variant": "v8"})).unwrap();
+        assert_eq!(v["platform"], json!("linux/arm64/v8"));
+        assert_eq!(v["variant"], json!("v8"));
+        // Round-trips parse_platform for both forms.
+        for s in ["linux/amd64", "linux/arm64/v8", "windows/amd64"] {
+            let p = op_parse_platform(json!({ "platform": s })).unwrap();
+            let mut req = json!({ "os": p["os"], "architecture": p["architecture"] });
+            if !p["variant"].is_null() {
+                req["variant"] = p["variant"].clone();
+            }
+            assert_eq!(
+                op_build_platform(req).unwrap()["platform"],
+                json!(s),
+                "round-trips {s}"
+            );
+        }
+        // Errors: missing os/arch, empty variant, a `/` inside a part.
+        assert!(op_build_platform(json!({"architecture": "amd64"})).is_err());
+        assert!(op_build_platform(json!({"os": "linux"})).is_err());
+        assert!(
+            op_build_platform(json!({"os": "linux", "architecture": "amd64", "variant": ""}))
+                .is_err()
+        );
+        assert!(op_build_platform(json!({"os": "lin/ux", "architecture": "amd64"})).is_err());
+        assert!(op_build_platform(json!({})).is_err());
     }
 
     #[test]

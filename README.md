@@ -193,6 +193,7 @@ Docker::build_restart_policy($policy, $max_retries?) → $spec   # inverse; max_
 Docker::parse_memory($memory) → { memory, value, unit, bytes }   # --memory/--shm-size byte size (go-units RAMInBytes; base 1024, k/m/g/t/p, optional i/b)
 Docker::format_memory($bytes) → { bytes, value, unit, memory }   # inverse: largest exact binary unit (536870912 → 512m); round-trips parse_memory
 Docker::parse_platform($platform) → { platform, os, architecture, variant }   # --platform os/arch[/variant] (linux/arm64/v8); variant optional
+Docker::build_platform(\%parts) → { platform, os, architecture, variant }     # { os, architecture, variant? } → --platform string; inverse of parse_platform
 ```
 
 `parse_mount` classifies a `-v` short mount: a host-path source (`/`, `.`, `~`)
