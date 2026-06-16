@@ -84,5 +84,6 @@ assert_ok exists &Docker::build_env, "Docker::build_env exists"
 assert_ok exists &Docker::parse_restart_policy, "Docker::parse_restart_policy exists"
 assert_ok exists &Docker::build_restart_policy, "Docker::build_restart_policy exists"
 assert_ok exists &Docker::parse_memory, "Docker::parse_memory exists"
+assert_ok exists &Docker::format_memory, "Docker::format_memory exists"
 
 test_run

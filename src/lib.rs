@@ -1319,6 +1319,45 @@ fn op_parse_memory(opts: Value) -> Result<Value> {
     }))
 }
 
+/// Format a byte count as a Docker memory string — the inverse of `parse_memory`.
+/// Picks the largest binary unit (`k`/`m`/`g`/`t`/`p`, base 1024) that divides the
+/// byte count evenly, so the result is an exact integer that round-trips through
+/// `parse_memory`; a count not divisible by 1024 stays a bare byte number, and 0
+/// is `"0"`. opts: `bytes` (or `value`, required, non-negative). Returns
+/// `{bytes, value, unit, memory}`. Pure.
+fn op_format_memory(opts: Value) -> Result<Value> {
+    let bytes = opts
+        .get("bytes")
+        .or_else(|| opts.get("value"))
+        .and_then(Value::as_i64)
+        .ok_or_else(|| anyhow!("missing bytes"))?;
+    if bytes < 0 {
+        return Err(anyhow!("bytes must not be negative: {bytes}"));
+    }
+    let b = bytes as u64;
+    let units: [(u64, &str); 5] = [
+        (1024u64.pow(5), "p"),
+        (1024u64.pow(4), "t"),
+        (1024u64.pow(3), "g"),
+        (1024u64.pow(2), "m"),
+        (1024, "k"),
+    ];
+    let (value, unit, memory) = if b == 0 {
+        (0u64, "", "0".to_string())
+    } else {
+        match units.iter().find(|(mult, _)| b.is_multiple_of(*mult)) {
+            Some(&(mult, suffix)) => (b / mult, suffix, format!("{}{}", b / mult, suffix)),
+            None => (b, "", b.to_string()),
+        }
+    };
+    Ok(json!({
+        "bytes": bytes,
+        "value": value,
+        "unit": unit,
+        "memory": memory,
+    }))
+}
+
 fn op_parse_restart_policy(opts: Value) -> Result<Value> {
     let spec = opts
         .get("spec")
@@ -1666,6 +1705,11 @@ pub extern "C" fn docker__parse_restart_policy(args: *const c_char) -> *const c_
 #[no_mangle]
 pub extern "C" fn docker__parse_memory(args: *const c_char) -> *const c_char {
     ffi_call_async(args, |opts| async move { op_parse_memory(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__format_memory(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_format_memory(opts) })
 }
 
 #[no_mangle]
@@ -2590,6 +2634,44 @@ mod tests {
         assert!(op_parse_memory(json!({"memory": "-5m"})).is_err());
         assert!(op_parse_memory(json!({"memory": "abc"})).is_err());
         assert!(op_parse_memory(json!({})).is_err());
+    }
+
+    #[test]
+    fn format_memory_inverts_parse_memory() {
+        let m = |bytes: i64| {
+            op_format_memory(json!({ "bytes": bytes })).unwrap()["memory"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        // Largest binary unit that divides evenly.
+        assert_eq!(m(512 * 1024 * 1024), "512m");
+        assert_eq!(m(2 * 1024 * 1024 * 1024), "2g");
+        assert_eq!(m(1024), "1k");
+        // 1.5 GiB isn't a whole number of GiB, so it falls to the largest unit
+        // that divides evenly — 1536 MiB.
+        assert_eq!(m(1_610_612_736), "1536m");
+        // Not divisible by 1024 → a bare byte number; zero is "0".
+        assert_eq!(m(100), "100");
+        assert_eq!(m(0), "0");
+        // Round-trips parse_memory for any exact byte count.
+        for bytes in [1024_i64, 536870912, 2147483648, 1126400, 4096, 100, 0] {
+            let s = m(bytes);
+            assert_eq!(
+                op_parse_memory(json!({ "memory": s })).unwrap()["bytes"]
+                    .as_i64()
+                    .unwrap(),
+                bytes,
+                "round-trip for {bytes}"
+            );
+        }
+        // `value` alias + errors.
+        assert_eq!(
+            op_format_memory(json!({"value": 1024})).unwrap()["memory"],
+            json!("1k")
+        );
+        assert!(op_format_memory(json!({"bytes": -1})).is_err());
+        assert!(op_format_memory(json!({})).is_err());
     }
 
     #[test]

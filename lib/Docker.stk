@@ -468,3 +468,12 @@ fn Docker::parse_memory ($memory) {
     Docker::_decode("parse_memory", docker__parse_memory(to_json({ memory => $memory })))
 }
 
+## Format a byte count as a Docker memory string — the inverse of parse_memory.
+## Picks the largest binary unit (k/m/g/t/p, base 1024) that divides $bytes evenly
+## so the result round-trips through parse_memory; a count not divisible by 1024
+## stays a bare byte number, and 0 is "0". Returns a hashref
+## { bytes, value, unit, memory }.
+fn Docker::format_memory ($bytes) {
+    Docker::_decode("format_memory", docker__format_memory(to_json({ bytes => $bytes })))
+}
+

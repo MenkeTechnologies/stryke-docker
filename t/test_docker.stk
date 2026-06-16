@@ -216,4 +216,13 @@ assert_eq Docker::parse_memory("2g")->{unit},      "g",        "parse_memory: su
 assert_dies fn { Docker::parse_memory("12x") },  "parse_memory: unknown suffix dies"
 assert_dies fn { Docker::parse_memory("abc") },  "parse_memory: a non-numeric value dies"
 
+# format_memory: inverse of parse_memory (bytes → largest exact binary unit).
+assert_eq Docker::format_memory(536870912)->{memory},  "512m", "format_memory: 512 MiB → 512m"
+assert_eq Docker::format_memory(2147483648)->{memory}, "2g",   "format_memory: 2 GiB → 2g"
+assert_eq Docker::format_memory(1610612736)->{memory}, "1536m", "format_memory: 1.5 GiB falls to 1536m (exact)"
+assert_eq Docker::format_memory(100)->{memory},        "100",  "format_memory: not divisible by 1024 stays a byte count"
+assert_eq Docker::format_memory(0)->{memory},          "0",    "format_memory: zero is 0"
+assert_eq Docker::parse_memory(Docker::format_memory(536870912)->{memory})->{bytes}, 536870912, "format_memory: round-trips parse_memory"
+assert_dies fn { Docker::format_memory(-1) }, "format_memory: rejects a negative byte count"
+
 test_run
