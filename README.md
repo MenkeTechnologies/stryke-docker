@@ -186,6 +186,8 @@ Docker::parse_port_spec($spec)     → { host_ip, host_port, container_port, pro
 Docker::build_port_spec(%opts)     → $spec     # parts → [ip:][host:]container[/proto]; inverse of parse_port_spec
 Docker::parse_mount($spec)         → { type, source, target, readonly, options }   # -v src:dst[:opts]
 Docker::build_mount(%opts)         → $spec     # { target, source?, options?, readonly? } → -v spec; inverse of parse_mount
+Docker::parse_env($spec)           → { spec, key, value, from_host }   # -e KEY=VAL; split on first =; bare KEY → from_host
+Docker::build_env($key, $value?)   → $spec     # KEY=VALUE, or bare KEY (host passthrough) when value omitted; inverse of parse_env
 ```
 
 `parse_mount` classifies a `-v` short mount: a host-path source (`/`, `.`, `~`)

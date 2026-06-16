@@ -79,5 +79,7 @@ assert_ok exists &Docker::parse_port_spec, "Docker::parse_port_spec exists"
 assert_ok exists &Docker::build_port_spec, "Docker::build_port_spec exists"
 assert_ok exists &Docker::parse_mount, "Docker::parse_mount exists"
 assert_ok exists &Docker::build_mount, "Docker::build_mount exists"
+assert_ok exists &Docker::parse_env, "Docker::parse_env exists"
+assert_ok exists &Docker::build_env, "Docker::build_env exists"
 
 test_run

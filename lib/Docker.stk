@@ -431,3 +431,17 @@ fn Docker::build_mount (%opts) {
     Docker::_decode("build_mount", docker__build_mount(to_json(\%opts)))->{spec}
 }
 
+## Parse a -e env spec into a hashref { spec, key, value, from_host }. Splits on
+## the FIRST "=": "KEY=VALUE" sets value (trailing "=" → empty string), a bare
+## "KEY" means host passthrough (from_host => 1, value => undef). Empty key dies.
+fn Docker::parse_env ($spec) {
+    Docker::_decode("parse_env", docker__parse_env(to_json({ spec => $spec })))
+}
+
+## Assemble a -e env spec from parts — inverse of parse_env. With $value emits
+## "KEY=VALUE" (empty string → "KEY="); without it emits a bare "KEY" (host
+## passthrough). Empty key dies. Returns the spec string.
+fn Docker::build_env ($key, $value = undef) {
+    Docker::_decode("build_env", docker__build_env(to_json({ key => $key, value => $value })))->{spec}
+}
+

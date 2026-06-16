@@ -1209,6 +1209,65 @@ fn op_build_mount(opts: Value) -> Result<Value> {
     Ok(json!({ "spec": spec }))
 }
 
+/// Parse a `docker run -e` environment spec into its parts. Docker splits on the
+/// FIRST `=`: `KEY=VALUE` sets the value (a trailing `=` gives an empty string),
+/// while a bare `KEY` with no `=` means "pass the variable through from the host
+/// environment at runtime" — encoded here as `from_host: true` with a null
+/// `value`. A value may itself contain `=` (`K=a=b` → value `a=b`). An empty key
+/// (`=v`) is rejected. opts: `spec`. Returns `{spec, key, value, from_host}`.
+/// Pure.
+fn op_parse_env(opts: Value) -> Result<Value> {
+    let spec = opts
+        .get("spec")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing spec"))?;
+    match spec.split_once('=') {
+        Some((key, value)) => {
+            if key.is_empty() {
+                return Err(anyhow!("env spec has an empty key: `{spec}`"));
+            }
+            Ok(json!({
+                "spec": spec,
+                "key": key,
+                "value": value,
+                "from_host": false,
+            }))
+        }
+        None => {
+            if spec.is_empty() {
+                return Err(anyhow!("env spec is empty"));
+            }
+            Ok(json!({
+                "spec": spec,
+                "key": spec,
+                "value": Value::Null,
+                "from_host": true,
+            }))
+        }
+    }
+}
+
+/// Assemble a `-e` environment spec from parts — the inverse of `parse_env`.
+/// With a `value` it emits `KEY=VALUE` (value may be a string or a number; an
+/// empty string yields the trailing-`=` form `KEY=`). Without a `value` it emits
+/// a bare `KEY`, the host-passthrough form. An empty key is rejected. opts:
+/// `key` (required), optional `value`. Returns `{spec}`. Pure.
+fn op_build_env(opts: Value) -> Result<Value> {
+    let key = opts
+        .get("key")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("missing key"))?;
+    let spec = match opts.get("value") {
+        None | Some(Value::Null) => key.to_string(),
+        Some(Value::String(s)) => format!("{key}={s}"),
+        Some(Value::Number(n)) => format!("{key}={n}"),
+        Some(Value::Bool(b)) => format!("{key}={b}"),
+        Some(other) => return Err(anyhow!("env value must be a scalar, got `{other}`")),
+    };
+    Ok(json!({ "spec": spec }))
+}
+
 // ── exports ─────────────────────────────────────────────────────────────────
 
 #[no_mangle]
@@ -1466,6 +1525,16 @@ pub extern "C" fn docker__parse_mount(args: *const c_char) -> *const c_char {
 #[no_mangle]
 pub extern "C" fn docker__build_mount(args: *const c_char) -> *const c_char {
     ffi_call_async(args, |opts| async move { op_build_mount(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__parse_env(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_parse_env(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__build_env(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_build_env(opts) })
 }
 
 #[cfg(test)]
@@ -2262,5 +2331,69 @@ mod tests {
         // Options without a source can't be expressed; missing target errors.
         assert!(op_build_mount(json!({"target": "/cache", "readonly": true})).is_err());
         assert!(op_build_mount(json!({"source": "/d"})).is_err());
+    }
+
+    #[test]
+    fn parse_env_splits_on_first_equals_and_marks_host_passthrough() {
+        // KEY=VALUE: split on the first `=`, from_host false.
+        let r = op_parse_env(json!({"spec": "FOO=bar"})).unwrap();
+        assert_eq!(r["key"], json!("FOO"));
+        assert_eq!(r["value"], json!("bar"));
+        assert_eq!(r["from_host"], json!(false));
+        // A value may contain `=`: only the first one splits.
+        let m = op_parse_env(json!({"spec": "URL=a=b=c"})).unwrap();
+        assert_eq!(m["key"], json!("URL"));
+        assert_eq!(m["value"], json!("a=b=c"));
+        // Trailing `=` is an empty value, NOT host passthrough.
+        let e = op_parse_env(json!({"spec": "EMPTY="})).unwrap();
+        assert_eq!(e["value"], json!(""));
+        assert_eq!(e["from_host"], json!(false));
+        // Bare KEY (no `=`) means pass through from the host environment.
+        let h = op_parse_env(json!({"spec": "HOME"})).unwrap();
+        assert_eq!(h["key"], json!("HOME"));
+        assert_eq!(h["value"], Value::Null);
+        assert_eq!(h["from_host"], json!(true));
+        // Empty key / empty spec error.
+        assert!(op_parse_env(json!({"spec": "=oops"})).is_err());
+        assert!(op_parse_env(json!({"spec": ""})).is_err());
+        assert!(op_parse_env(json!({})).is_err());
+    }
+
+    #[test]
+    fn build_env_inverts_parse_env() {
+        // With a value → KEY=VALUE.
+        assert_eq!(
+            op_build_env(json!({"key": "FOO", "value": "bar"})).unwrap()["spec"],
+            json!("FOO=bar")
+        );
+        // Empty string value → trailing `=`.
+        assert_eq!(
+            op_build_env(json!({"key": "EMPTY", "value": ""})).unwrap()["spec"],
+            json!("EMPTY=")
+        );
+        // No value → bare KEY (host passthrough form).
+        assert_eq!(
+            op_build_env(json!({"key": "HOME"})).unwrap()["spec"],
+            json!("HOME")
+        );
+        // A numeric value is stringified.
+        assert_eq!(
+            op_build_env(json!({"key": "PORT", "value": 8080})).unwrap()["spec"],
+            json!("PORT=8080")
+        );
+        // Round-trips through parse_env for every form.
+        for spec in ["FOO=bar", "URL=a=b=c", "EMPTY=", "HOME"] {
+            let p = op_parse_env(json!({ "spec": spec })).unwrap();
+            let rebuilt = op_build_env(json!({
+                "key": p["key"],
+                "value": p["value"],
+            }))
+            .unwrap()["spec"]
+                .clone();
+            assert_eq!(rebuilt, json!(spec), "round-trip for {spec}");
+        }
+        // Empty key errors.
+        assert!(op_build_env(json!({"value": "x"})).is_err());
+        assert!(op_build_env(json!({"key": ""})).is_err());
     }
 }

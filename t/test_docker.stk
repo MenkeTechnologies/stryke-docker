@@ -161,4 +161,30 @@ assert_eq Docker::build_mount(source => "./src", target => "/app", options => ["
 assert_eq Docker::build_mount(%{ Docker::parse_mount("/data:/var/lib/data:ro") }), "/data:/var/lib/data:ro", "build_mount: round-trips parse_mount"
 assert_dies fn { Docker::build_mount(target => "/cache", readonly => 1) }, "build_mount: options without a source error"
 
+# parse_env: split on first =, host-passthrough for a bare key.
+val $kv = Docker::parse_env("FOO=bar")
+assert_eq $kv->{key},       "FOO", "parse_env: key before the ="
+assert_eq $kv->{value},     "bar", "parse_env: value after the ="
+assert_eq $kv->{from_host}, 0,     "parse_env: KEY=VALUE is not host passthrough"
+assert_eq Docker::parse_env("URL=a=b=c")->{value}, "a=b=c", "parse_env: only the first = splits"
+val $empty = Docker::parse_env("EMPTY=")
+assert_eq $empty->{value},     "", "parse_env: trailing = is an empty value"
+assert_eq $empty->{from_host}, 0,  "parse_env: empty value is still not passthrough"
+val $host = Docker::parse_env("HOME")
+assert_ok !defined($host->{value}), "parse_env: bare key has no value"
+assert_eq $host->{from_host}, 1,    "parse_env: bare key is host passthrough"
+assert_dies fn { Docker::parse_env("=oops") }, "parse_env: empty key errors"
+
+# build_env: inverse of parse_env.
+assert_eq Docker::build_env("FOO", "bar"), "FOO=bar", "build_env: KEY=VALUE"
+assert_eq Docker::build_env("EMPTY", ""),  "EMPTY=",  "build_env: empty value gives trailing ="
+assert_eq Docker::build_env("HOME"),       "HOME",    "build_env: no value is a bare key"
+assert_eq Docker::build_env("PORT", 8080), "PORT=8080", "build_env: numeric value stringified"
+# round-trips parse_env for every form.
+for val $spec (qw(FOO=bar URL=a=b=c EMPTY= HOME)) {
+    val $p = Docker::parse_env($spec)
+    assert_eq Docker::build_env($p->{key}, $p->{value}), $spec, "build_env: round-trips $spec"
+}
+assert_dies fn { Docker::build_env("") }, "build_env: empty key errors"
+
 test_run
