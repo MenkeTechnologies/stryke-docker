@@ -176,6 +176,7 @@ Docker::network_inspect $network, %opts → \%info        # driver, subnet, conn
 
 ```stryke
 Docker::parse_image_ref($ref)      → { registry, namespace, repository, tag, digest, path }
+Docker::normalize_image_ref($ref)  → { ref, registry, namespace, repository, tag, digest }   # canonical form: nginx → docker.io/library/nginx:latest
 Docker::build_image_ref(%opts)     → $ref     # parts → [registry/][namespace/]repo[:tag][@digest]; inverse of parse_image_ref
 Docker::valid_container_name($n)   → 1 | ""    # /?[a-zA-Z0-9][a-zA-Z0-9_.-]+
 Docker::valid_image_tag($tag)      → { tag, valid, reason }   # docker tag rules: ASCII alnum/_/./-, ≤128, no leading . or -
@@ -229,6 +230,7 @@ cdylib is dlopened in-process on first `use Docker` (via stryke's
 `pkg::commands::try_load_ffi_for` resolver hook). Its exports cover
 containers, images, networks, volumes, exec, logs, and prune, plus
 daemon-free helpers (`docker__parse_image_ref`, `docker__build_image_ref`,
+`docker__normalize_image_ref`,
 `docker__valid_container_name`, `docker__parse_port_spec`,
 `docker__build_port_spec`,
 `docker__parse_mount`). The

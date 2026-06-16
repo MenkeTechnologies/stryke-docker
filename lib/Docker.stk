@@ -357,6 +357,14 @@ fn Docker::parse_image_ref ($ref) {
     Docker::_decode("parse_image_ref", docker__parse_image_ref(to_json({ ref => $ref })))
 }
 
+## Expand an image reference to Docker's fully-qualified canonical form: a
+## missing registry → docker.io, a Docker Hub repo with no namespace → library,
+## a missing tag (no digest) → latest. nginx → docker.io/library/nginx:latest.
+## Returns a hashref { ref, registry, namespace, repository, tag, digest }.
+fn Docker::normalize_image_ref ($ref) {
+    Docker::_decode("normalize_image_ref", docker__normalize_image_ref(to_json({ ref => $ref })))
+}
+
 ## Assemble an image reference from parts — inverse of parse_image_ref. %opts:
 ## repository (required), registry, namespace, tag, digest. Produces
 ## "[registry/][namespace/]repository[:tag][@digest]". Returns the ref string.

@@ -80,6 +80,13 @@ val $short = Docker::parse_image_ref("nginx")
 assert_eq $short->{tag}, "latest", "parse_image_ref: short form defaults to latest"
 assert_ok !defined($short->{registry}), "parse_image_ref: no registry for short form"
 
+# normalize_image_ref: expand to Docker's canonical form.
+assert_eq Docker::normalize_image_ref("nginx")->{ref},          "docker.io/library/nginx:latest", "normalize_image_ref: short name → registry+library+latest"
+assert_eq Docker::normalize_image_ref("redis:6")->{ref},        "docker.io/library/redis:6",      "normalize_image_ref: keeps explicit tag"
+assert_eq Docker::normalize_image_ref("myuser/app")->{ref},     "docker.io/myuser/app:latest",    "normalize_image_ref: user namespace kept"
+assert_eq Docker::normalize_image_ref("ghcr.io/o/app")->{ref},  "ghcr.io/o/app:latest",           "normalize_image_ref: third-party registry, no library"
+assert_eq Docker::normalize_image_ref("nginx")->{namespace},    "library",                        "normalize_image_ref: library namespace reported"
+
 # build_image_ref: inverse of parse_image_ref (\@ escapes the literal @).
 assert_eq Docker::build_image_ref(registry => "registry.example.com:5000", namespace => "team", repository => "app", tag => "1.2.3", digest => "sha256:abc123"), "registry.example.com:5000/team/app:1.2.3\@sha256:abc123", "build_image_ref: full ref"
 assert_eq Docker::build_image_ref(repository => "nginx"), "nginx", "build_image_ref: bare repository"

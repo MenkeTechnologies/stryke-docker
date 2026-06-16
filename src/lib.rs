@@ -691,12 +691,21 @@ pub unsafe extern "C" fn stryke_free_cstring(p: *mut c_char) {
 /// its parts. The first path component is the registry only if it looks like a
 /// host (has `.`/`:` or is `localhost`). Tag defaults to `latest` when neither
 /// tag nor digest is present. Pure — contacts no registry.
-fn op_parse_image_ref(opts: Value) -> Result<Value> {
-    let r = opts
-        .get("ref")
-        .or_else(|| opts.get("image"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("missing ref"))?;
+/// The structural parts of an image reference. `tag` here is the literal tag
+/// found (no `latest` default); `op_parse_image_ref` applies the default.
+struct RefParts {
+    registry: Option<String>,
+    namespace: Option<String>,
+    repository: String,
+    tag: Option<String>,
+    digest: Option<String>,
+    path: String,
+}
+
+/// Split an image reference `[registry/][namespace/]repo[:tag][@digest]` into its
+/// parts. The first path component is a registry only when it has a `.`, a `:`,
+/// or is `localhost`. Shared by `parse_image_ref` and `normalize_image_ref`.
+fn parse_ref_parts(r: &str) -> Result<RefParts> {
     if r.is_empty() {
         return Err(anyhow!("empty image reference"));
     }
@@ -733,18 +742,86 @@ fn op_parse_image_ref(opts: Value) -> Result<Value> {
     } else {
         None
     };
-    let tag_out = match (&tag, &digest) {
+    Ok(RefParts {
+        registry,
+        namespace,
+        repository,
+        tag,
+        digest,
+        path: path.to_string(),
+    })
+}
+
+fn op_parse_image_ref(opts: Value) -> Result<Value> {
+    let r = opts
+        .get("ref")
+        .or_else(|| opts.get("image"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing ref"))?;
+    let p = parse_ref_parts(r)?;
+    let tag_out = match (&p.tag, &p.digest) {
         (Some(t), _) => Some(t.clone()),
         (None, None) => Some("latest".to_string()),
         (None, Some(_)) => None,
     };
     Ok(json!({
+        "registry": p.registry,
+        "namespace": p.namespace,
+        "repository": p.repository,
+        "tag": tag_out,
+        "digest": p.digest,
+        "path": p.path,
+    }))
+}
+
+/// Expand an image reference to its fully-qualified canonical form, the way
+/// Docker normalizes a short name: a missing registry becomes `docker.io`, a
+/// Docker Hub repo with no namespace gets `library`, and a missing tag (with no
+/// digest) becomes `latest`. `nginx` → `docker.io/library/nginx:latest`,
+/// `redis:6` → `docker.io/library/redis:6`, `ghcr.io/o/a` → `ghcr.io/o/a:latest`.
+/// opts: `ref` (or `image`). Returns `{ref, registry, namespace, repository,
+/// tag, digest}`. Pure.
+fn op_normalize_image_ref(opts: Value) -> Result<Value> {
+    let r = opts
+        .get("ref")
+        .or_else(|| opts.get("image"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing ref"))?;
+    let p = parse_ref_parts(r)?;
+    let registry = p.registry.unwrap_or_else(|| "docker.io".to_string());
+    let namespace = match p.namespace {
+        Some(ns) => Some(ns),
+        // Docker Hub official images get the implicit `library` namespace.
+        None if registry == "docker.io" => Some("library".to_string()),
+        None => None,
+    };
+    let tag = match (&p.tag, &p.digest) {
+        (Some(t), _) => Some(t.clone()),
+        (None, None) => Some("latest".to_string()),
+        (None, Some(_)) => None,
+    };
+    let mut out = registry.clone();
+    out.push('/');
+    if let Some(ns) = &namespace {
+        out.push_str(ns);
+        out.push('/');
+    }
+    out.push_str(&p.repository);
+    if let Some(t) = &tag {
+        out.push(':');
+        out.push_str(t);
+    }
+    if let Some(d) = &p.digest {
+        out.push('@');
+        out.push_str(d);
+    }
+    Ok(json!({
+        "ref": out,
         "registry": registry,
         "namespace": namespace,
-        "repository": repository,
-        "tag": tag_out,
-        "digest": digest,
-        "path": path,
+        "repository": p.repository,
+        "tag": tag,
+        "digest": p.digest,
     }))
 }
 
@@ -1274,6 +1351,11 @@ pub extern "C" fn docker__parse_image_ref(args: *const c_char) -> *const c_char 
 }
 
 #[no_mangle]
+pub extern "C" fn docker__normalize_image_ref(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_normalize_image_ref(opts) })
+}
+
+#[no_mangle]
 pub extern "C" fn docker__build_image_ref(args: *const c_char) -> *const c_char {
     ffi_call_async(args, |opts| async move { op_build_image_ref(opts) })
 }
@@ -1777,6 +1859,38 @@ mod tests {
             "digest-pinned ref has no default tag"
         );
         assert_eq!(v["digest"], json!("sha256:deadbeef"));
+    }
+
+    #[test]
+    fn normalize_image_ref_expands_to_canonical_form() {
+        let norm = |r: &str| {
+            op_normalize_image_ref(json!({ "ref": r })).unwrap()["ref"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        // Docker Hub short name → registry + library + latest.
+        assert_eq!(norm("nginx"), "docker.io/library/nginx:latest");
+        assert_eq!(norm("redis:6"), "docker.io/library/redis:6");
+        // A user repo keeps its namespace; gets the registry + latest.
+        assert_eq!(norm("myuser/app"), "docker.io/myuser/app:latest");
+        // An explicit docker.io still gets the library namespace.
+        assert_eq!(norm("docker.io/nginx"), "docker.io/library/nginx:latest");
+        // Third-party registry: no library namespace, just default tag.
+        assert_eq!(norm("ghcr.io/owner/app"), "ghcr.io/owner/app:latest");
+        assert_eq!(norm("localhost:5000/app:dev"), "localhost:5000/app:dev");
+        // Digest-pinned: no :latest is added.
+        assert_eq!(
+            norm("nginx@sha256:deadbeef"),
+            "docker.io/library/nginx@sha256:deadbeef"
+        );
+        // Structured fields are returned too.
+        let v = op_normalize_image_ref(json!({"ref": "nginx"})).unwrap();
+        assert_eq!(v["registry"], json!("docker.io"));
+        assert_eq!(v["namespace"], json!("library"));
+        assert_eq!(v["repository"], json!("nginx"));
+        assert!(op_normalize_image_ref(json!({})).is_err());
+        assert!(op_normalize_image_ref(json!({"ref": ""})).is_err());
     }
 
     #[test]
