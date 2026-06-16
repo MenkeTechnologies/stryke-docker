@@ -225,4 +225,14 @@ assert_eq Docker::format_memory(0)->{memory},          "0",    "format_memory: z
 assert_eq Docker::parse_memory(Docker::format_memory(536870912)->{memory})->{bytes}, 536870912, "format_memory: round-trips parse_memory"
 assert_dies fn { Docker::format_memory(-1) }, "format_memory: rejects a negative byte count"
 
+# parse_platform: --platform os/arch[/variant].
+val $pl = Docker::parse_platform("linux/amd64")
+assert_eq $pl->{os}, "linux",            "parse_platform: os"
+assert_eq $pl->{architecture}, "amd64",  "parse_platform: architecture"
+assert_ok !defined($pl->{variant}),      "parse_platform: no variant when omitted"
+val $plv = Docker::parse_platform("linux/arm64/v8")
+assert_eq $plv->{variant}, "v8",         "parse_platform: variant when present"
+assert_dies fn { Docker::parse_platform("linux") },             "parse_platform: rejects a bare os"
+assert_dies fn { Docker::parse_platform("linux/arm/v7/extra") }, "parse_platform: rejects too many segments"
+
 test_run

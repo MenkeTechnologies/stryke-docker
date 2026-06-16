@@ -1428,6 +1428,37 @@ fn op_build_restart_policy(opts: Value) -> Result<Value> {
     Ok(json!({ "spec": spec }))
 }
 
+/// Parse a Docker/OCI `--platform` string `os/arch[/variant]` into its parts —
+/// e.g. `linux/amd64`, `linux/arm64/v8`, `windows/amd64`. The OS and architecture
+/// are required; the variant (`v8`, `v7`, …) is optional. opts: `platform` (or
+/// `spec`). Returns `{platform, os, architecture, variant}` with `variant` null
+/// when absent. Pure.
+fn op_parse_platform(opts: Value) -> Result<Value> {
+    let s = opts
+        .get("platform")
+        .or_else(|| opts.get("spec"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing platform"))?
+        .trim();
+    let parts: Vec<&str> = s.split('/').collect();
+    let (os, arch, variant) = match parts.as_slice() {
+        [os, arch] => (*os, *arch, Value::Null),
+        [os, arch, variant] => (*os, *arch, json!(*variant)),
+        _ => return Err(anyhow!("invalid platform `{s}` (want os/arch[/variant])")),
+    };
+    if os.is_empty() || arch.is_empty() {
+        return Err(anyhow!(
+            "platform os and architecture must be non-empty: `{s}`"
+        ));
+    }
+    if variant.as_str() == Some("") {
+        return Err(anyhow!(
+            "platform variant must be non-empty when present: `{s}`"
+        ));
+    }
+    Ok(json!({ "platform": s, "os": os, "architecture": arch, "variant": variant }))
+}
+
 // ── exports ─────────────────────────────────────────────────────────────────
 
 #[no_mangle]
@@ -1700,6 +1731,11 @@ pub extern "C" fn docker__build_env(args: *const c_char) -> *const c_char {
 #[no_mangle]
 pub extern "C" fn docker__parse_restart_policy(args: *const c_char) -> *const c_char {
     ffi_call_async(args, |opts| async move { op_parse_restart_policy(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__parse_platform(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_parse_platform(opts) })
 }
 
 #[no_mangle]
@@ -2596,6 +2632,31 @@ mod tests {
         assert!(op_parse_restart_policy(json!({"spec": "sometimes"})).is_err());
         assert!(op_parse_restart_policy(json!({"spec": "on-failure:abc"})).is_err());
         assert!(op_parse_restart_policy(json!({})).is_err());
+    }
+
+    #[test]
+    fn parse_platform_splits_os_arch_variant() {
+        // Two-part form: no variant.
+        let p = op_parse_platform(json!({"platform": "linux/amd64"})).unwrap();
+        assert_eq!(p["os"], json!("linux"));
+        assert_eq!(p["architecture"], json!("amd64"));
+        assert_eq!(p["variant"], Value::Null);
+        // Three-part form: a variant.
+        let v = op_parse_platform(json!({"platform": "linux/arm64/v8"})).unwrap();
+        assert_eq!(v["os"], json!("linux"));
+        assert_eq!(v["architecture"], json!("arm64"));
+        assert_eq!(v["variant"], json!("v8"));
+        // Windows, and the `spec` alias.
+        assert_eq!(
+            op_parse_platform(json!({"spec": "windows/amd64"})).unwrap()["os"],
+            json!("windows")
+        );
+        // Errors: too few/many segments, empty segments, missing arg.
+        assert!(op_parse_platform(json!({"platform": "linux"})).is_err());
+        assert!(op_parse_platform(json!({"platform": "linux/arm/v7/extra"})).is_err());
+        assert!(op_parse_platform(json!({"platform": "/amd64"})).is_err());
+        assert!(op_parse_platform(json!({"platform": "linux/arm64/"})).is_err());
+        assert!(op_parse_platform(json!({})).is_err());
     }
 
     #[test]

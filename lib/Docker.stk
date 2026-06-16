@@ -477,3 +477,11 @@ fn Docker::format_memory ($bytes) {
     Docker::_decode("format_memory", docker__format_memory(to_json({ bytes => $bytes })))
 }
 
+## Parse a Docker/OCI --platform string "os/arch[/variant]" into its parts —
+## e.g. "linux/amd64", "linux/arm64/v8". os and architecture are required; the
+## variant (v8, v7, …) is optional. Returns a hashref
+## { platform, os, architecture, variant } with variant undef when absent.
+fn Docker::parse_platform ($platform) {
+    Docker::_decode("parse_platform", docker__parse_platform(to_json({ platform => $platform })))
+}
+
