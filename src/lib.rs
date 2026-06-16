@@ -824,6 +824,62 @@ fn op_valid_image_tag(opts: Value) -> Result<Value> {
     Ok(json!({"tag": tag, "valid": reason.is_none(), "reason": reason}))
 }
 
+/// Validate a content digest `algorithm:hex` as used in `name@sha256:…` image
+/// pins, per the OCI/distribution grammar. The algorithm is one or more
+/// lowercase-alphanumeric components joined by `+._-`; the encoded part is
+/// lowercase hex of even length. Registered algorithms are length-checked:
+/// `sha256` needs 64 hex chars, `sha512` needs 128. Returns `{digest, algorithm,
+/// hex, valid, reason}`. The validation `parse_image_ref` skips on the opaque
+/// digest it carries. Pure.
+fn op_valid_digest(opts: Value) -> Result<Value> {
+    let digest = opts
+        .get("digest")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing digest"))?;
+    let split = digest.split_once(':');
+    let reason: Option<&str> = match split {
+        None => Some("must be `algorithm:hex` (e.g. sha256:…)"),
+        Some((algo, hex)) => {
+            // algorithm := component ([+._-] component)*, component := [a-z0-9]+
+            let algo_ok = !algo.is_empty()
+                && algo.split(['+', '.', '_', '-']).all(|c| {
+                    !c.is_empty()
+                        && c.bytes()
+                            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+                })
+                && !algo.starts_with(['+', '.', '_', '-'])
+                && !algo.ends_with(['+', '.', '_', '-']);
+            let hex_ok = !hex.is_empty()
+                && hex.len() % 2 == 0
+                && hex
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+            if !algo_ok {
+                Some("algorithm must be lowercase-alphanumeric components joined by `+._-`")
+            } else if !hex_ok {
+                Some("encoded part must be even-length lowercase hex")
+            } else if algo == "sha256" && hex.len() != 64 {
+                Some("sha256 digest must be 64 hex characters")
+            } else if algo == "sha512" && hex.len() != 128 {
+                Some("sha512 digest must be 128 hex characters")
+            } else {
+                None
+            }
+        }
+    };
+    let (algorithm, hex) = match split {
+        Some((a, h)) if reason.is_none() => (Some(a), Some(h)),
+        _ => (None, None),
+    };
+    Ok(json!({
+        "digest": digest,
+        "algorithm": algorithm,
+        "hex": hex,
+        "valid": reason.is_none(),
+        "reason": reason,
+    }))
+}
+
 /// Parse a `-p` port spec `[host_ip:][host_port:]container_port[/proto]` into
 /// `{host_ip, host_port, container_port, protocol}` (protocol default `tcp`).
 /// IPv6 host literals must be bracketed (`[::1]:8080:80`). Pure.
@@ -1230,6 +1286,11 @@ pub extern "C" fn docker__valid_container_name(args: *const c_char) -> *const c_
 #[no_mangle]
 pub extern "C" fn docker__valid_image_tag(args: *const c_char) -> *const c_char {
     ffi_call_async(args, |opts| async move { op_valid_image_tag(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__valid_digest(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_valid_digest(opts) })
 }
 
 #[no_mangle]
@@ -1782,6 +1843,49 @@ mod tests {
         let long = op_valid_image_tag(json!({"tag": "a".repeat(129)})).unwrap();
         assert_eq!(long["valid"], json!(false));
         assert!(long["reason"].as_str().unwrap().contains("128"));
+    }
+
+    #[test]
+    fn valid_digest_checks_algorithm_and_encoded_length() {
+        let sha256 = format!("sha256:{}", "a".repeat(64));
+        let v = op_valid_digest(json!({ "digest": sha256 })).unwrap();
+        assert_eq!(v["valid"], json!(true));
+        assert_eq!(v["algorithm"], json!("sha256"));
+        assert_eq!(v["hex"], json!("a".repeat(64)));
+        // sha512 needs 128 hex.
+        assert_eq!(
+            op_valid_digest(json!({ "digest": format!("sha512:{}", "f".repeat(128)) })).unwrap()
+                ["valid"],
+            json!(true)
+        );
+        // Rejections with reason fragments.
+        for (d, want) in [
+            ("sha256deadbeef", "algorithm:hex"),
+            ("sha256:", "lowercase hex"),
+            ("sha256:abcd", "64 hex"),
+            ("sha512:abcd", "128 hex"),
+            ("sha256:ABCDEF", "lowercase hex"),
+            ("Sha256:aa", "lowercase-alphanumeric"),
+            (&format!("sha256:{}g", "a".repeat(63)), "lowercase hex"),
+        ] {
+            let r = op_valid_digest(json!({ "digest": d })).unwrap();
+            assert_eq!(r["valid"], json!(false), "`{d}` should be invalid");
+            assert!(
+                r["reason"].as_str().unwrap().contains(want),
+                "`{d}`: reason `{}` should mention `{want}`",
+                r["reason"]
+            );
+        }
+        // An unregistered algorithm with even-length lowercase hex is accepted.
+        assert_eq!(
+            op_valid_digest(json!({ "digest": "multihash:abcd" })).unwrap()["valid"],
+            json!(true)
+        );
+        // Odd-length hex is rejected.
+        assert_eq!(
+            op_valid_digest(json!({ "digest": "multihash:abc" })).unwrap()["valid"],
+            json!(false)
+        );
     }
 
     #[test]

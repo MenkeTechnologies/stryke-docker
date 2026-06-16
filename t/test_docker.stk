@@ -101,6 +101,15 @@ val $lt = Docker::valid_image_tag("a" x 129)
 assert_eq $lt->{valid}, 0,                                   "valid_image_tag: over 128 chars fails"
 assert_match qr/128/, $lt->{reason},                         "valid_image_tag: reason names the limit"
 
+# valid_digest: OCI/distribution content-digest grammar.
+val $dg = Docker::valid_digest("sha256:" . ("a" x 64))
+assert_ok $dg->{valid},                                      "valid_digest: sha256 with 64 hex is valid"
+assert_eq $dg->{algorithm}, "sha256",                        "valid_digest: algorithm split out"
+assert_ok Docker::valid_digest("sha512:" . ("f" x 128))->{valid}, "valid_digest: sha512 with 128 hex"
+assert_eq Docker::valid_digest("sha256:" . ("a" x 64) . "extra")->{valid}, 0, "valid_digest: sha256 must be exactly 64 hex"
+assert_eq Docker::valid_digest("sha256:ABCDEF")->{valid}, 0, "valid_digest: rejects uppercase hex"
+assert_eq Docker::valid_digest("deadbeef")->{valid}, 0,      "valid_digest: requires algorithm:hex form"
+
 val $p = Docker::parse_port_spec("127.0.0.1:8080:80/tcp")
 assert_eq $p->{host_ip},        "127.0.0.1", "parse_port_spec: host_ip"
 assert_eq $p->{host_port},      "8080",      "parse_port_spec: host_port"

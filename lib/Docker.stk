@@ -378,6 +378,13 @@ fn Docker::valid_image_tag ($tag) {
     Docker::_decode("valid_image_tag", docker__valid_image_tag(to_json({ tag => $tag })))
 }
 
+## Validate a content digest "algorithm:hex" (the @sha256:… image pin) per the
+## OCI/distribution grammar — sha256 needs 64 hex chars, sha512 needs 128.
+## Returns a hashref { digest, algorithm, hex, valid, reason }.
+fn Docker::valid_digest ($digest) {
+    Docker::_decode("valid_digest", docker__valid_digest(to_json({ digest => $digest })))
+}
+
 ## Parse a -p port spec "[host_ip:][host_port:]container_port[/proto]" into a
 ## hashref { host_ip, host_port, container_port, protocol }. IPv6 hosts must be
 ## bracketed.
