@@ -957,6 +957,74 @@ fn op_valid_digest(opts: Value) -> Result<Value> {
     }))
 }
 
+/// A single repository path component per distribution/reference:
+/// `[a-z0-9]+ (separator [a-z0-9]+)*`, where a separator between alphanumeric
+/// runs is a single `.`, a single `_`, a double `__`, or one-or-more `-`.
+/// Lowercase only; must start and end alphanumeric.
+fn valid_path_component(c: &str) -> bool {
+    let b = c.as_bytes();
+    let alnum = |x: u8| x.is_ascii_lowercase() || x.is_ascii_digit();
+    if b.is_empty() || !alnum(b[0]) || !alnum(b[b.len() - 1]) {
+        return false;
+    }
+    let mut i = 0;
+    while i < b.len() {
+        if alnum(b[i]) {
+            i += 1;
+            continue;
+        }
+        match b[i] {
+            b'.' => i += 1,
+            b'_' => {
+                i += if i + 1 < b.len() && b[i + 1] == b'_' {
+                    2
+                } else {
+                    1
+                }
+            }
+            b'-' => {
+                while i < b.len() && b[i] == b'-' {
+                    i += 1;
+                }
+            }
+            _ => return false,
+        }
+        // A separator run must be followed by another alphanumeric run.
+        if i >= b.len() || !alnum(b[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Validate a Docker/OCI repository name (the `namespace/repo` path, excluding
+/// any registry domain) per the distribution/reference grammar: one or more
+/// `/`-joined path components, each `[a-z0-9]+` runs separated by a single `.`,
+/// `_`, `__`, or `-`+. Lowercase only — the rule that rejects `docker build -t
+/// MyApp`. At most 255 characters. Returns `{name, valid, reason}`. Pure.
+fn op_valid_repository_name(opts: Value) -> Result<Value> {
+    let name = opts
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing name"))?;
+    let reason: Option<String> = if name.is_empty() {
+        Some("must not be empty".into())
+    } else if name.len() > 255 {
+        Some("must be at most 255 characters".into())
+    } else {
+        name.split('/')
+            .find(|c| !valid_path_component(c))
+            .map(|c| {
+                if c.is_empty() {
+                    "has an empty path component".into()
+                } else {
+                    format!("component `{c}` must be lowercase alphanumerics separated by a single `.`, `_`, `__`, or `-`")
+                }
+            })
+    };
+    Ok(json!({"name": name, "valid": reason.is_none(), "reason": reason}))
+}
+
 /// Parse a `-p` port spec `[host_ip:][host_port:]container_port[/proto]` into
 /// `{host_ip, host_port, container_port, protocol}` (protocol default `tcp`).
 /// IPv6 host literals must be bracketed (`[::1]:8080:80`). Pure.
@@ -1373,6 +1441,11 @@ pub extern "C" fn docker__valid_image_tag(args: *const c_char) -> *const c_char 
 #[no_mangle]
 pub extern "C" fn docker__valid_digest(args: *const c_char) -> *const c_char {
     ffi_call_async(args, |opts| async move { op_valid_digest(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__valid_repository_name(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_valid_repository_name(opts) })
 }
 
 #[no_mangle]
@@ -2000,6 +2073,47 @@ mod tests {
             op_valid_digest(json!({ "digest": "multihash:abc" })).unwrap()["valid"],
             json!(false)
         );
+    }
+
+    #[test]
+    fn valid_repository_name_follows_distribution_grammar() {
+        let chk = |n: &str| op_valid_repository_name(json!({ "name": n })).unwrap();
+        // Valid: single component, namespaced, registry-style path, allowed seps.
+        for ok in [
+            "nginx",
+            "library/nginx",
+            "myorg/myapp",
+            "a.b",
+            "a_b",
+            "a__b",
+            "a-b",
+            "a---b",
+            "team/sub-svc/app.v2",
+            "123",
+        ] {
+            assert_eq!(chk(ok)["valid"], json!(true), "`{ok}` should be valid");
+        }
+        // Invalid: uppercase (the classic `docker build -t MyApp` failure).
+        assert_eq!(chk("MyApp")["valid"], json!(false));
+        assert_eq!(chk("Org/app")["valid"], json!(false));
+        // Invalid separator runs and boundaries.
+        for bad in [
+            "a..b",  // double period
+            "a___b", // triple underscore
+            "a_.b",  // mixed separators
+            "-abc",  // leading dash
+            "abc-",  // trailing dash
+            ".abc",  // leading period
+            "a//b",  // empty path component
+            "",      // empty
+        ] {
+            assert_eq!(chk(bad)["valid"], json!(false), "`{bad}` should be invalid");
+            assert!(chk(bad)["reason"].is_string(), "`{bad}` has a reason");
+        }
+        // Over the 255-char limit.
+        assert_eq!(chk(&"a".repeat(256))["valid"], json!(false));
+        // Missing name errors.
+        assert!(op_valid_repository_name(json!({})).is_err());
     }
 
     #[test]

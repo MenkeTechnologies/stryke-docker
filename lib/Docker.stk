@@ -393,6 +393,14 @@ fn Docker::valid_digest ($digest) {
     Docker::_decode("valid_digest", docker__valid_digest(to_json({ digest => $digest })))
 }
 
+## Validate a Docker/OCI repository name (the namespace/repo path, no registry
+## domain) per distribution/reference: lowercase alphanumeric components joined
+## by `/`, each run separated by a single `.`, `_`, `__`, or `-` — the rule that
+## rejects `docker build -t MyApp`. Returns a hashref { name, valid, reason }.
+fn Docker::valid_repository_name ($name) {
+    Docker::_decode("valid_repository_name", docker__valid_repository_name(to_json({ name => $name })))
+}
+
 ## Parse a -p port spec "[host_ip:][host_port:]container_port[/proto]" into a
 ## hashref { host_ip, host_port, container_port, protocol }. IPv6 hosts must be
 ## bracketed.
