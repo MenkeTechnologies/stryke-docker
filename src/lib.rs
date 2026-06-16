@@ -1273,6 +1273,52 @@ fn op_build_env(opts: Value) -> Result<Value> {
 /// `on-failure` accepts the `:N` retry limit (a non-negative integer). opts:
 /// `spec` (or `policy`). Returns `{spec, policy, max_retries}` (`max_retries`
 /// null unless an `on-failure:N` count is given). Pure.
+/// Parse a Docker memory / byte-size string (`--memory`, `--shm-size`,
+/// `--memory-swap`) into bytes — a faithful port of go-units `RAMInBytes`. The
+/// grammar is `<number>[ ]?<unit>?` where the unit is `k`/`m`/`g`/`t`/`p`
+/// (case-insensitive, base 1024) with an optional `i` and/or `b` decoration
+/// (`m`, `mb`, `mib` all mean MiB); a bare number is bytes. The number may be a
+/// decimal (`1.5g`); the byte result truncates toward zero like go-units. opts:
+/// `memory` (or `value`, required). Returns `{memory, value, unit, bytes}`. Pure.
+fn op_parse_memory(opts: Value) -> Result<Value> {
+    let raw = opts
+        .get("memory")
+        .or_else(|| opts.get("value"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing memory"))?;
+    let s = raw.trim();
+    let split = s
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(s.len());
+    let (num_str, suffix) = s.split_at(split);
+    let number: f64 = num_str
+        .parse()
+        .map_err(|_| anyhow!("invalid Docker memory value: {raw}"))?;
+    if number < 0.0 {
+        return Err(anyhow!("Docker memory must not be negative: {raw}"));
+    }
+    // Strip the optional `b` then `i` decoration, leaving a bare unit letter.
+    let lower = suffix.trim_start().to_ascii_lowercase();
+    let u = lower.strip_suffix('b').unwrap_or(&lower);
+    let u = u.strip_suffix('i').unwrap_or(u);
+    let (unit, mult): (&str, u64) = match u {
+        "" => ("", 1),
+        "k" => ("k", 1024),
+        "m" => ("m", 1024u64.pow(2)),
+        "g" => ("g", 1024u64.pow(3)),
+        "t" => ("t", 1024u64.pow(4)),
+        "p" => ("p", 1024u64.pow(5)),
+        _ => return Err(anyhow!("unknown Docker memory suffix `{suffix}` in {raw}")),
+    };
+    let bytes = (number * mult as f64).trunc() as i64;
+    Ok(json!({
+        "memory": raw,
+        "value": number,
+        "unit": unit,
+        "bytes": bytes,
+    }))
+}
+
 fn op_parse_restart_policy(opts: Value) -> Result<Value> {
     let spec = opts
         .get("spec")
@@ -1615,6 +1661,11 @@ pub extern "C" fn docker__build_env(args: *const c_char) -> *const c_char {
 #[no_mangle]
 pub extern "C" fn docker__parse_restart_policy(args: *const c_char) -> *const c_char {
     ffi_call_async(args, |opts| async move { op_parse_restart_policy(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__parse_memory(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_parse_memory(opts) })
 }
 
 #[no_mangle]
@@ -2501,6 +2552,44 @@ mod tests {
         assert!(op_parse_restart_policy(json!({"spec": "sometimes"})).is_err());
         assert!(op_parse_restart_policy(json!({"spec": "on-failure:abc"})).is_err());
         assert!(op_parse_restart_policy(json!({})).is_err());
+    }
+
+    #[test]
+    fn parse_memory_matches_go_units_raminbytes() {
+        let b = |s: &str| {
+            op_parse_memory(json!({ "memory": s })).unwrap()["bytes"]
+                .as_i64()
+                .unwrap()
+        };
+        // Base 1024, the unit letter is case-insensitive.
+        assert_eq!(b("512m"), 512 * 1024 * 1024);
+        assert_eq!(b("512M"), 512 * 1024 * 1024);
+        assert_eq!(b("2g"), 2 * 1024 * 1024 * 1024);
+        assert_eq!(b("1k"), 1024);
+        // `b`/`i` decorations all mean the same binary unit.
+        assert_eq!(b("512mb"), 512 * 1024 * 1024);
+        assert_eq!(b("512mib"), 512 * 1024 * 1024);
+        // A bare number is bytes; an explicit `b` too.
+        assert_eq!(b("1048576"), 1_048_576);
+        assert_eq!(b("64b"), 64);
+        // Decimals truncate toward zero like go-units' int64() cast.
+        assert_eq!(b("1.5g"), 1_610_612_736);
+        assert_eq!(b("1.1k"), 1126); // 1.1*1024 = 1126.4 → 1126
+                                     // A space between number and unit is allowed.
+        assert_eq!(b("512 m"), 512 * 1024 * 1024);
+        // The value + unit fields are surfaced too.
+        let v = op_parse_memory(json!({"memory": "2g"})).unwrap();
+        assert_eq!(v["value"], json!(2.0));
+        assert_eq!(v["unit"], json!("g"));
+        // `value` alias + errors.
+        assert_eq!(
+            op_parse_memory(json!({"value": "1k"})).unwrap()["bytes"],
+            json!(1024)
+        );
+        assert!(op_parse_memory(json!({"memory": "12x"})).is_err());
+        assert!(op_parse_memory(json!({"memory": "-5m"})).is_err());
+        assert!(op_parse_memory(json!({"memory": "abc"})).is_err());
+        assert!(op_parse_memory(json!({})).is_err());
     }
 
     #[test]

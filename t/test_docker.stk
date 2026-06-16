@@ -206,4 +206,14 @@ for val $spec (qw(no always unless-stopped on-failure on-failure:5)) {
 }
 assert_dies fn { Docker::build_restart_policy("always", 3) }, "build_restart_policy: count on a non-on-failure policy dies"
 
+# parse_memory: go-units RAMInBytes (base 1024, k/m/g/t/p, optional i/b, decimals).
+assert_eq Docker::parse_memory("512m")->{bytes},   536870912,  "parse_memory: 512m = 512 MiB"
+assert_eq Docker::parse_memory("2g")->{bytes},     2147483648, "parse_memory: 2g = 2 GiB"
+assert_eq Docker::parse_memory("512mib")->{bytes}, 536870912,  "parse_memory: the ib decoration is the same binary unit"
+assert_eq Docker::parse_memory("1048576")->{bytes}, 1048576,   "parse_memory: a bare number is bytes"
+assert_eq Docker::parse_memory("1.5g")->{bytes},   1610612736, "parse_memory: decimals truncate toward zero"
+assert_eq Docker::parse_memory("2g")->{unit},      "g",        "parse_memory: surfaces the unit letter"
+assert_dies fn { Docker::parse_memory("12x") },  "parse_memory: unknown suffix dies"
+assert_dies fn { Docker::parse_memory("abc") },  "parse_memory: a non-numeric value dies"
+
 test_run

@@ -459,3 +459,12 @@ fn Docker::build_restart_policy ($policy, $max_retries = undef) {
     Docker::_decode("build_restart_policy", docker__build_restart_policy(to_json({ policy => $policy, max_retries => $max_retries })))->{spec}
 }
 
+## Parse a Docker memory / byte-size string (--memory, --shm-size, --memory-swap)
+## into a hashref { memory, value, unit, bytes }. A faithful port of go-units
+## RAMInBytes: units k/m/g/t/p are case-insensitive and base 1024, with an optional
+## i and/or b decoration (m, mb, mib all mean MiB); a bare number is bytes; decimals
+## like "1.5g" are accepted and the byte count truncates toward zero.
+fn Docker::parse_memory ($memory) {
+    Docker::_decode("parse_memory", docker__parse_memory(to_json({ memory => $memory })))
+}
+

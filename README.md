@@ -190,6 +190,7 @@ Docker::parse_env($spec)           → { spec, key, value, from_host }   # -e KE
 Docker::build_env($key, $value?)   → $spec     # KEY=VALUE, or bare KEY (host passthrough) when value omitted; inverse of parse_env
 Docker::parse_restart_policy($spec) → { spec, policy, max_retries }   # --restart no|always|unless-stopped|on-failure[:N]; only on-failure takes :N
 Docker::build_restart_policy($policy, $max_retries?) → $spec   # inverse; max_retries honoured only with on-failure
+Docker::parse_memory($memory) → { memory, value, unit, bytes }   # --memory/--shm-size byte size (go-units RAMInBytes; base 1024, k/m/g/t/p, optional i/b)
 ```
 
 `parse_mount` classifies a `-v` short mount: a host-path source (`/`, `.`, `~`)
