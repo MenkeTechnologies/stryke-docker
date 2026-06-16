@@ -1268,6 +1268,81 @@ fn op_build_env(opts: Value) -> Result<Value> {
     Ok(json!({ "spec": spec }))
 }
 
+/// Parse a `docker run --restart` policy into its parts. The four policies are
+/// `no`, `always`, `unless-stopped`, and `on-failure[:max-retries]`; only
+/// `on-failure` accepts the `:N` retry limit (a non-negative integer). opts:
+/// `spec` (or `policy`). Returns `{spec, policy, max_retries}` (`max_retries`
+/// null unless an `on-failure:N` count is given). Pure.
+fn op_parse_restart_policy(opts: Value) -> Result<Value> {
+    let spec = opts
+        .get("spec")
+        .or_else(|| opts.get("policy"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing spec"))?;
+    let (name, retries) = match spec.split_once(':') {
+        Some((n, r)) => (n, Some(r)),
+        None => (spec, None),
+    };
+    let max_retries = match name {
+        "no" | "always" | "unless-stopped" => {
+            if retries.is_some() {
+                return Err(anyhow!(
+                    "restart policy `{name}` does not take a `:max-retries`"
+                ));
+            }
+            Value::Null
+        }
+        "on-failure" => match retries {
+            None => Value::Null,
+            Some(r) => {
+                let n: u32 = r.parse().map_err(|_| {
+                    anyhow!("invalid max-retries `{r}` (want a non-negative integer)")
+                })?;
+                json!(n)
+            }
+        },
+        other => {
+            return Err(anyhow!(
+                "unknown restart policy `{other}` (no|always|unless-stopped|on-failure[:N])"
+            ))
+        }
+    };
+    Ok(json!({ "spec": spec, "policy": name, "max_retries": max_retries }))
+}
+
+/// Assemble a `--restart` policy spec from parts — the inverse of
+/// `parse_restart_policy`. `max_retries` is honoured only with `on-failure`
+/// (yielding `on-failure:N`); supplying it for any other policy is an error.
+/// opts: `policy` (required), optional `max_retries`. Returns `{spec}`. Pure.
+fn op_build_restart_policy(opts: Value) -> Result<Value> {
+    let policy = opts
+        .get("policy")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("missing policy"))?;
+    let retries = opts.get("max_retries").and_then(Value::as_u64);
+    let spec = match policy {
+        "no" | "always" | "unless-stopped" => {
+            if retries.is_some() {
+                return Err(anyhow!(
+                    "restart policy `{policy}` does not take a max-retries"
+                ));
+            }
+            policy.to_string()
+        }
+        "on-failure" => match retries {
+            Some(n) => format!("on-failure:{n}"),
+            None => "on-failure".to_string(),
+        },
+        other => {
+            return Err(anyhow!(
+                "unknown restart policy `{other}` (no|always|unless-stopped|on-failure)"
+            ))
+        }
+    };
+    Ok(json!({ "spec": spec }))
+}
+
 // ── exports ─────────────────────────────────────────────────────────────────
 
 #[no_mangle]
@@ -1535,6 +1610,16 @@ pub extern "C" fn docker__parse_env(args: *const c_char) -> *const c_char {
 #[no_mangle]
 pub extern "C" fn docker__build_env(args: *const c_char) -> *const c_char {
     ffi_call_async(args, |opts| async move { op_build_env(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__parse_restart_policy(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_parse_restart_policy(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__build_restart_policy(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_build_restart_policy(opts) })
 }
 
 #[cfg(test)]
@@ -2395,5 +2480,63 @@ mod tests {
         // Empty key errors.
         assert!(op_build_env(json!({"value": "x"})).is_err());
         assert!(op_build_env(json!({"key": ""})).is_err());
+    }
+
+    #[test]
+    fn parse_restart_policy_handles_all_four_policies() {
+        let p = |s: &str| op_parse_restart_policy(json!({ "spec": s })).unwrap();
+        // The three count-less policies.
+        for name in ["no", "always", "unless-stopped"] {
+            let v = p(name);
+            assert_eq!(v["policy"], json!(name));
+            assert_eq!(v["max_retries"], Value::Null);
+        }
+        // on-failure with and without a retry count.
+        assert_eq!(p("on-failure")["max_retries"], Value::Null);
+        let of = p("on-failure:5");
+        assert_eq!(of["policy"], json!("on-failure"));
+        assert_eq!(of["max_retries"], json!(5));
+        // Errors: a count on a non-on-failure policy, unknown policy, bad count.
+        assert!(op_parse_restart_policy(json!({"spec": "always:3"})).is_err());
+        assert!(op_parse_restart_policy(json!({"spec": "sometimes"})).is_err());
+        assert!(op_parse_restart_policy(json!({"spec": "on-failure:abc"})).is_err());
+        assert!(op_parse_restart_policy(json!({})).is_err());
+    }
+
+    #[test]
+    fn build_restart_policy_inverts_parse_restart_policy() {
+        assert_eq!(
+            op_build_restart_policy(json!({"policy": "always"})).unwrap()["spec"],
+            json!("always")
+        );
+        assert_eq!(
+            op_build_restart_policy(json!({"policy": "on-failure", "max_retries": 10})).unwrap()
+                ["spec"],
+            json!("on-failure:10")
+        );
+        assert_eq!(
+            op_build_restart_policy(json!({"policy": "on-failure"})).unwrap()["spec"],
+            json!("on-failure")
+        );
+        // Round-trips parse for every form.
+        for spec in [
+            "no",
+            "always",
+            "unless-stopped",
+            "on-failure",
+            "on-failure:5",
+        ] {
+            let p = op_parse_restart_policy(json!({ "spec": spec })).unwrap();
+            let rebuilt = op_build_restart_policy(json!({
+                "policy": p["policy"], "max_retries": p["max_retries"],
+            }))
+            .unwrap()["spec"]
+                .clone();
+            assert_eq!(rebuilt, json!(spec), "round-trip for {spec}");
+        }
+        // A retry count on a non-on-failure policy / unknown policy / missing.
+        assert!(op_build_restart_policy(json!({"policy": "always", "max_retries": 3})).is_err());
+        assert!(op_build_restart_policy(json!({"policy": "nope"})).is_err());
+        assert!(op_build_restart_policy(json!({})).is_err());
     }
 }

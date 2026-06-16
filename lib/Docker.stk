@@ -445,3 +445,17 @@ fn Docker::build_env ($key, $value = undef) {
     Docker::_decode("build_env", docker__build_env(to_json({ key => $key, value => $value })))->{spec}
 }
 
+## Parse a --restart policy into a hashref { spec, policy, max_retries }. The four
+## policies are no / always / unless-stopped / on-failure[:N]; only on-failure
+## takes the :N retry limit (max_retries undef otherwise). Unknown policy dies.
+fn Docker::parse_restart_policy ($spec) {
+    Docker::_decode("parse_restart_policy", docker__parse_restart_policy(to_json({ spec => $spec })))
+}
+
+## Assemble a --restart policy spec from parts — inverse of parse_restart_policy.
+## $max_retries is honoured only with on-failure (→ "on-failure:N"); passing it
+## for any other policy dies. Returns the spec string.
+fn Docker::build_restart_policy ($policy, $max_retries = undef) {
+    Docker::_decode("build_restart_policy", docker__build_restart_policy(to_json({ policy => $policy, max_retries => $max_retries })))->{spec}
+}
+

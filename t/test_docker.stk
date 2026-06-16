@@ -187,4 +187,23 @@ for val $spec (qw(FOO=bar URL=a=b=c EMPTY= HOME)) {
 }
 assert_dies fn { Docker::build_env("") }, "build_env: empty key errors"
 
+# parse_restart_policy: the four --restart policies.
+assert_eq Docker::parse_restart_policy("always")->{policy}, "always", "parse_restart_policy: always"
+assert_ok !defined(Docker::parse_restart_policy("no")->{max_retries}), "parse_restart_policy: no has no retry count"
+val $of = Docker::parse_restart_policy("on-failure:5")
+assert_eq $of->{policy}, "on-failure", "parse_restart_policy: on-failure policy"
+assert_eq $of->{max_retries}, 5,        "parse_restart_policy: on-failure:5 retry count"
+assert_dies fn { Docker::parse_restart_policy("always:3") }, "parse_restart_policy: count on a non-on-failure policy dies"
+assert_dies fn { Docker::parse_restart_policy("sometimes") }, "parse_restart_policy: unknown policy dies"
+
+# build_restart_policy: inverse.
+assert_eq Docker::build_restart_policy("unless-stopped"), "unless-stopped", "build_restart_policy: bare policy"
+assert_eq Docker::build_restart_policy("on-failure", 10), "on-failure:10", "build_restart_policy: on-failure with count"
+# round-trips parse_restart_policy.
+for val $spec (qw(no always unless-stopped on-failure on-failure:5)) {
+    val $r = Docker::parse_restart_policy($spec)
+    assert_eq Docker::build_restart_policy($r->{policy}, $r->{max_retries}), $spec, "build_restart_policy: round-trips $spec"
+}
+assert_dies fn { Docker::build_restart_policy("always", 3) }, "build_restart_policy: count on a non-on-failure policy dies"
+
 test_run

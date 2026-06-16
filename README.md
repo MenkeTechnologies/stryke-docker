@@ -188,6 +188,8 @@ Docker::parse_mount($spec)         → { type, source, target, readonly, options
 Docker::build_mount(%opts)         → $spec     # { target, source?, options?, readonly? } → -v spec; inverse of parse_mount
 Docker::parse_env($spec)           → { spec, key, value, from_host }   # -e KEY=VAL; split on first =; bare KEY → from_host
 Docker::build_env($key, $value?)   → $spec     # KEY=VALUE, or bare KEY (host passthrough) when value omitted; inverse of parse_env
+Docker::parse_restart_policy($spec) → { spec, policy, max_retries }   # --restart no|always|unless-stopped|on-failure[:N]; only on-failure takes :N
+Docker::build_restart_policy($policy, $max_retries?) → $spec   # inverse; max_retries honoured only with on-failure
 ```
 
 `parse_mount` classifies a `-v` short mount: a host-path source (`/`, `.`, `~`)
