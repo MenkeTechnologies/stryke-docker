@@ -125,6 +125,16 @@ assert_eq Docker::valid_repository_name("a..b")->{valid}, 0,       "valid_reposi
 assert_eq Docker::valid_repository_name("a//b")->{valid}, 0,       "valid_repository_name: rejects empty path component"
 assert_dies fn { Docker::valid_repository_name() }, "valid_repository_name: dies on missing name"
 
+# valid_image_ref: validate a complete reference (registry/ns/repo:tag@digest).
+assert_ok Docker::valid_image_ref("nginx:1.25")->{valid},                         "valid_image_ref: repo + tag"
+assert_ok Docker::valid_image_ref("registry.io:5000/ns/repo:tag")->{valid},       "valid_image_ref: registry with port + namespace"
+assert_ok Docker::valid_image_ref("nginx\@sha256:" . ("0" x 64))->{valid},         "valid_image_ref: repo + digest"
+val $bad = Docker::valid_image_ref("MyApp:latest")
+assert_eq $bad->{valid}, 0,                          "valid_image_ref: uppercase repository rejected"
+assert_match qr/^repository:/, $bad->{reason},       "valid_image_ref: reason names the failing component"
+assert_eq Docker::valid_image_ref("nginx:-bad")->{valid}, 0,                       "valid_image_ref: a bad tag is rejected"
+assert_dies fn { Docker::valid_image_ref() }, "valid_image_ref: dies on missing ref"
+
 val $p = Docker::parse_port_spec("127.0.0.1:8080:80/tcp")
 assert_eq $p->{host_ip},        "127.0.0.1", "parse_port_spec: host_ip"
 assert_eq $p->{host_port},      "8080",      "parse_port_spec: host_port"

@@ -182,6 +182,7 @@ Docker::valid_container_name($n)   → 1 | ""    # /?[a-zA-Z0-9][a-zA-Z0-9_.-]+
 Docker::valid_image_tag($tag)      → { tag, valid, reason }   # docker tag rules: ASCII alnum/_/./-, ≤128, no leading . or -
 Docker::valid_digest($digest)      → { digest, algorithm, hex, valid, reason }   # OCI content digest algorithm:hex (sha256→64, sha512→128 lowercase hex)
 Docker::valid_repository_name($name) → { name, valid, reason }   # distribution/reference repo path grammar; lowercase only (rejects MyApp)
+Docker::valid_image_ref($ref) → { ref, valid, reason }           # validate a COMPLETE reference (registry/ns/repo:tag@digest); reason names the failing component
 Docker::parse_port_spec($spec)     → { host_ip, host_port, container_port, protocol }
 Docker::build_port_spec(%opts)     → $spec     # parts → [ip:][host:]container[/proto]; inverse of parse_port_spec
 Docker::parse_mount($spec)         → { type, source, target, readonly, options }   # -v src:dst[:opts]

@@ -774,6 +774,53 @@ fn op_parse_image_ref(opts: Value) -> Result<Value> {
     }))
 }
 
+/// Validate a complete image reference `[registry/][namespace/]repo[:tag][@digest]`
+/// — the whole-reference member of the `valid_*` family. The reference is first
+/// split structurally, then each present component is checked with the matching
+/// component validator (`valid_repository_name` on the repository path,
+/// `valid_image_tag` on the tag, `valid_digest` on the digest); the first failure
+/// names the offending component. opts: `ref` (or `image`). Returns `{ref, valid,
+/// reason}` (reason null when valid). Pure.
+fn op_valid_image_ref(opts: Value) -> Result<Value> {
+    let r = opts
+        .get("ref")
+        .or_else(|| opts.get("image"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing ref"))?;
+    let p = match parse_ref_parts(r) {
+        Ok(p) => p,
+        Err(e) => {
+            return Ok(
+                json!({"ref": r, "valid": false, "reason": format!("not a valid reference: {e}")}),
+            )
+        }
+    };
+    let fail = |component: &str, reason: &Value| json!({"ref": r, "valid": false, "reason": format!("{component}: {}", reason.as_str().unwrap_or("invalid"))});
+    // The repository-name grammar applies to the path WITHOUT the registry
+    // domain (a registry's `host:port` is not part of the repository name).
+    let repo_path = match &p.namespace {
+        Some(ns) => format!("{}/{}", ns, p.repository),
+        None => p.repository.clone(),
+    };
+    let repo = op_valid_repository_name(json!({"name": repo_path}))?;
+    if repo["valid"] != json!(true) {
+        return Ok(fail("repository", &repo["reason"]));
+    }
+    if let Some(tag) = &p.tag {
+        let t = op_valid_image_tag(json!({"tag": tag}))?;
+        if t["valid"] != json!(true) {
+            return Ok(fail("tag", &t["reason"]));
+        }
+    }
+    if let Some(digest) = &p.digest {
+        let d = op_valid_digest(json!({"digest": digest}))?;
+        if d["valid"] != json!(true) {
+            return Ok(fail("digest", &d["reason"]));
+        }
+    }
+    Ok(json!({"ref": r, "valid": true, "reason": Value::Null}))
+}
+
 /// Expand an image reference to its fully-qualified canonical form, the way
 /// Docker normalizes a short name: a missing registry becomes `docker.io`, a
 /// Docker Hub repo with no namespace gets `library`, and a missing tag (with no
@@ -1742,6 +1789,11 @@ pub extern "C" fn docker__valid_repository_name(args: *const c_char) -> *const c
 }
 
 #[no_mangle]
+pub extern "C" fn docker__valid_image_ref(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_valid_image_ref(opts) })
+}
+
+#[no_mangle]
 pub extern "C" fn docker__parse_port_spec(args: *const c_char) -> *const c_char {
     ffi_call_async(args, |opts| async move { op_parse_port_spec(opts) })
 }
@@ -2447,6 +2499,40 @@ mod tests {
         assert_eq!(chk(&"a".repeat(256))["valid"], json!(false));
         // Missing name errors.
         assert!(op_valid_repository_name(json!({})).is_err());
+    }
+
+    #[test]
+    fn valid_image_ref_validates_each_component() {
+        let chk = |r: &str| op_valid_image_ref(json!({ "ref": r })).unwrap();
+        // Valid full references across registry / namespace / tag / digest forms.
+        for ok in [
+            "nginx",
+            "nginx:1.25",
+            "library/nginx:latest",
+            "ghcr.io/org/app:v2.1",
+            "registry.io:5000/ns/repo:tag",
+            "nginx@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        ] {
+            assert_eq!(chk(ok)["valid"], json!(true), "`{ok}` should be valid");
+        }
+        // An uppercase repository fails, and the reason names the component.
+        let up = chk("MyApp:latest");
+        assert_eq!(up["valid"], json!(false));
+        assert!(up["reason"].as_str().unwrap().starts_with("repository:"));
+        // A bad tag fails as the tag component.
+        let bt = chk("nginx:-bad");
+        assert_eq!(bt["valid"], json!(false));
+        assert!(bt["reason"].as_str().unwrap().starts_with("tag:"));
+        // A malformed digest fails as the digest component.
+        let bd = chk("nginx@sha256:xyz");
+        assert_eq!(bd["valid"], json!(false));
+        assert!(bd["reason"].as_str().unwrap().starts_with("digest:"));
+        // `image` alias; missing arg errors.
+        assert_eq!(
+            op_valid_image_ref(json!({"image": "redis:7"})).unwrap()["valid"],
+            json!(true)
+        );
+        assert!(op_valid_image_ref(json!({})).is_err());
     }
 
     #[test]

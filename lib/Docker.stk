@@ -401,6 +401,16 @@ fn Docker::valid_repository_name ($name) {
     Docker::_decode("valid_repository_name", docker__valid_repository_name(to_json({ name => $name })))
 }
 
+## Validate a COMPLETE image reference ([registry/][namespace/]repo[:tag][@digest])
+## — the whole-reference member of the valid_* family. The ref is split, then each
+## present component is checked with the matching component validator
+## (valid_repository_name / valid_image_tag / valid_digest); the first failure
+## names the component. Returns a hashref { ref, valid, reason } (reason undef
+## when valid).
+fn Docker::valid_image_ref ($ref) {
+    Docker::_decode("valid_image_ref", docker__valid_image_ref(to_json({ ref => $ref })))
+}
+
 ## Parse a -p port spec "[host_ip:][host_port:]container_port[/proto]" into a
 ## hashref { host_ip, host_port, container_port, protocol }. IPv6 hosts must be
 ## bracketed.
