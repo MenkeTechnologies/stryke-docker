@@ -184,6 +184,7 @@ Docker::valid_digest($digest)      → { digest, algorithm, hex, valid, reason }
 Docker::valid_repository_name($name) → { name, valid, reason }   # distribution/reference repo path grammar; lowercase only (rejects MyApp)
 Docker::valid_image_ref($ref) → { ref, valid, reason }           # validate a COMPLETE reference (registry/ns/repo:tag@digest); reason names the failing component
 Docker::parse_port_spec($spec)     → { host_ip, host_port, container_port, protocol }
+Docker::parse_ulimit($spec)        → { spec, name, soft, hard, unlimited }   # docker run --ulimit type=soft[:hard]; single value → hard=soft; -1 = unlimited
 Docker::build_port_spec(%opts)     → $spec     # parts → [ip:][host:]container[/proto]; inverse of parse_port_spec
 Docker::parse_mount($spec)         → { type, source, target, readonly, options }   # -v src:dst[:opts]
 Docker::build_mount(%opts)         → $spec     # { target, source?, options?, readonly? } → -v spec; inverse of parse_mount

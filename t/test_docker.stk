@@ -149,6 +149,18 @@ assert_eq Docker::build_port_spec(container_port => 80), "80", "build_port_spec:
 assert_eq Docker::build_port_spec(host_port => 53, container_port => 53, protocol => "udp"), "53:53/udp", "build_port_spec: non-tcp appends /proto"
 assert_eq Docker::parse_port_spec(Docker::build_port_spec(host_ip => "127.0.0.1", host_port => 8080, container_port => 80))->{host_port}, "8080", "build_port_spec → parse_port_spec round-trips"
 
+# parse_ulimit: docker run --ulimit type=soft[:hard].
+val $ul = Docker::parse_ulimit("nofile=1024:2048")
+assert_eq $ul->{name}, "nofile", "parse_ulimit: rlimit type"
+assert_eq $ul->{soft}, 1024,     "parse_ulimit: soft limit"
+assert_eq $ul->{hard}, 2048,     "parse_ulimit: hard limit"
+assert_eq $ul->{unlimited}, 0,   "parse_ulimit: bounded is not unlimited"
+val $single = Docker::parse_ulimit("nproc=512")
+assert_eq $single->{hard}, 512,  "parse_ulimit: single value sets hard = soft"
+assert_eq Docker::parse_ulimit("core=-1:-1")->{unlimited}, 1, "parse_ulimit: -1 means unlimited"
+assert_dies fn { Docker::parse_ulimit("nofile") }, "parse_ulimit: rejects a spec with no '='"
+assert_dies fn { Docker::parse_ulimit("nofile=soft") }, "parse_ulimit: rejects a non-integer limit"
+
 # parse_mount: bind (host path) read-only, named volume, anonymous.
 val $bind = Docker::parse_mount("/data:/var/lib/data:ro")
 assert_eq $bind->{type},     "bind",          "parse_mount: host path is a bind"

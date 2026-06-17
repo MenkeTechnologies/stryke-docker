@@ -418,6 +418,14 @@ fn Docker::parse_port_spec ($spec) {
     Docker::_decode("parse_port_spec", docker__parse_port_spec(to_json({ spec => $spec })))
 }
 
+## Parse a `docker run --ulimit` spec "type=soft[:hard]" → a hashref
+## { spec, name, soft, hard, unlimited }. A single value sets both soft and hard
+## (Docker's rule); -1 means unlimited and sets the `unlimited` flag. The rlimit
+## type is taken verbatim (nofile, nproc, core, memlock, …).
+fn Docker::parse_ulimit ($spec) {
+    Docker::_decode("parse_ulimit", docker__parse_ulimit(to_json({ spec => $spec })))
+}
+
 ## Build a -p port spec from parts — inverse of parse_port_spec. %opts:
 ## container_port (required), host_port, host_ip (IPv6 literals auto-bracketed),
 ## protocol (default tcp; only emitted as /proto when not tcp). Returns the spec

@@ -1117,6 +1117,47 @@ fn op_parse_port_spec(opts: Value) -> Result<Value> {
     }))
 }
 
+/// Parse a `docker run --ulimit` spec — `<type>=<soft>[:<hard>]`. When no hard
+/// limit is given, Docker uses the soft value for both (`nofile=1024` →
+/// soft=hard=1024). Values are integers and `-1` means unlimited, which sets the
+/// `unlimited` flag. The type is taken verbatim (any rlimit name: nofile, nproc,
+/// core, memlock, …) — not restricted to a fixed list, so new kernel limits parse
+/// too. opts: `spec` (or `ulimit`, required). Returns
+/// `{spec, name, soft, hard, unlimited}`. Pure.
+fn op_parse_ulimit(opts: Value) -> Result<Value> {
+    let spec = opts
+        .get("spec")
+        .or_else(|| opts.get("ulimit"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing spec"))?;
+    let (name, values) = spec
+        .split_once('=')
+        .ok_or_else(|| anyhow!("ulimit must be `type=soft[:hard]`: `{spec}`"))?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(anyhow!("ulimit type must not be empty in `{spec}`"));
+    }
+    // A single value is both the soft and the hard limit (Docker's behavior).
+    let (soft_s, hard_s) = match values.split_once(':') {
+        Some((s, h)) => (s, h),
+        None => (values, values),
+    };
+    let parse_one = |s: &str, which: &str| -> Result<i64> {
+        s.trim()
+            .parse::<i64>()
+            .map_err(|_| anyhow!("ulimit {which} limit must be an integer in `{spec}`"))
+    };
+    let soft = parse_one(soft_s, "soft")?;
+    let hard = parse_one(hard_s, "hard")?;
+    Ok(json!({
+        "spec": spec,
+        "name": name,
+        "soft": soft,
+        "hard": hard,
+        "unlimited": soft == -1 || hard == -1,
+    }))
+}
+
 /// Build a `docker run -p` port spec from parts — the inverse of
 /// `parse_port_spec`. opts: `container_port` (required, string or number),
 /// optional `host_port`, `host_ip` (bracketed automatically when it is an IPv6
@@ -1796,6 +1837,11 @@ pub extern "C" fn docker__valid_image_ref(args: *const c_char) -> *const c_char 
 #[no_mangle]
 pub extern "C" fn docker__parse_port_spec(args: *const c_char) -> *const c_char {
     ffi_call_async(args, |opts| async move { op_parse_port_spec(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__parse_ulimit(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_parse_ulimit(opts) })
 }
 
 #[no_mangle]
@@ -2560,6 +2606,35 @@ mod tests {
         assert_eq!(v["host_ip"], json!("::1"));
         assert_eq!(v["host_port"], json!("8080"));
         assert_eq!(v["container_port"], json!("80"));
+    }
+
+    #[test]
+    fn parse_ulimit_splits_type_soft_and_hard() {
+        // Explicit soft:hard.
+        let v = op_parse_ulimit(json!({"spec": "nofile=1024:2048"})).unwrap();
+        assert_eq!(v["name"], json!("nofile"));
+        assert_eq!(v["soft"], json!(1024));
+        assert_eq!(v["hard"], json!(2048));
+        assert_eq!(v["unlimited"], json!(false));
+        // A single value is both soft and hard (Docker's rule).
+        let s = op_parse_ulimit(json!({"spec": "nproc=512"})).unwrap();
+        assert_eq!(s["soft"], json!(512));
+        assert_eq!(s["hard"], json!(512));
+        // -1 means unlimited and sets the flag.
+        let u = op_parse_ulimit(json!({"spec": "core=-1:-1"})).unwrap();
+        assert_eq!(u["soft"], json!(-1));
+        assert_eq!(u["unlimited"], json!(true));
+        // `ulimit` is an accepted alias for `spec`.
+        assert_eq!(
+            op_parse_ulimit(json!({"ulimit": "memlock=67108864"})).unwrap()["name"],
+            json!("memlock")
+        );
+        // Errors: no `=`, empty type, non-integer limit, missing arg.
+        assert!(op_parse_ulimit(json!({"spec": "nofile"})).is_err());
+        assert!(op_parse_ulimit(json!({"spec": "=1024"})).is_err());
+        assert!(op_parse_ulimit(json!({"spec": "nofile=soft"})).is_err());
+        assert!(op_parse_ulimit(json!({"spec": "nofile=1024:x"})).is_err());
+        assert!(op_parse_ulimit(json!({})).is_err());
     }
 
     #[test]
