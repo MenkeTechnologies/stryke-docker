@@ -763,6 +763,27 @@ async fn op_resize(opts: Value) -> Result<Value> {
     Ok(json!({"ok": true}))
 }
 
+/// Resize a running exec instance's TTY (`/exec/{id}/resize`) — the exec
+/// counterpart of `op_resize`. opts: `id` (the exec id from `create_exec`),
+/// `width`, `height` (new size in character cells). Returns `{ok: true}`.
+async fn op_resize_exec(opts: Value) -> Result<Value> {
+    use bollard::exec::ResizeExecOptions;
+    let id = opts["id"]
+        .as_str()
+        .ok_or_else(|| anyhow!("missing id"))?
+        .to_string();
+    let width = opts["width"]
+        .as_u64()
+        .ok_or_else(|| anyhow!("missing width"))? as u16;
+    let height = opts["height"]
+        .as_u64()
+        .ok_or_else(|| anyhow!("missing height"))? as u16;
+    let d = get_client(&opts)?;
+    d.resize_exec(&id, ResizeExecOptions { width, height })
+        .await?;
+    Ok(json!({"ok": true}))
+}
+
 // ── FFI plumbing ────────────────────────────────────────────────────────────
 
 fn ffi_call_async<F, Fut>(args: *const c_char, handler: F) -> *const c_char
@@ -1922,6 +1943,253 @@ fn op_parse_signal(opts: Value) -> Result<Value> {
     }))
 }
 
+/// Parse a Go `time.ParseDuration` string into nanoseconds — the format every
+/// Docker time flag uses (`--health-interval`, `--health-timeout`,
+/// `--health-start-period`, `--stop-timeout`'s engine form, swarm
+/// `--restart-delay`). A duration is an optional leading sign then one or more
+/// `<number><unit>` runs with no separators: `300ms`, `1h30m`, `2h45m0s`,
+/// `-1.5h`. Units are `ns`, `us` (or `µs`), `ms`, `s`, `m`, `h`; numbers may
+/// carry a fraction (`1.5h`). A bare `0` is allowed (zero needs no unit); any
+/// other unitless number is an error, matching Go. opts: `duration` (or
+/// `value`). Returns `{duration, nanos, seconds}` (`seconds` the float form).
+/// Pure.
+fn op_parse_duration(opts: Value) -> Result<Value> {
+    let raw = opts
+        .get("duration")
+        .or_else(|| opts.get("value"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing duration"))?;
+    let s = raw.trim();
+    if s.is_empty() {
+        return Err(anyhow!("duration must not be empty"));
+    }
+    let (neg, body) = match s.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, s.strip_prefix('+').unwrap_or(s)),
+    };
+    // Go accepts a bare "0" (and "+0"/"-0") with no unit.
+    if body == "0" {
+        return Ok(json!({"duration": raw, "nanos": 0, "seconds": 0.0}));
+    }
+    if body.is_empty() {
+        return Err(anyhow!("invalid duration `{raw}`"));
+    }
+    // Each unit's value in nanoseconds.
+    let unit_ns = |u: &str| -> Option<f64> {
+        Some(match u {
+            "ns" => 1.0,
+            "us" | "µs" => 1_000.0,
+            "ms" => 1_000_000.0,
+            "s" => 1_000_000_000.0,
+            "m" => 60.0 * 1_000_000_000.0,
+            "h" => 3_600.0 * 1_000_000_000.0,
+            _ => return None,
+        })
+    };
+    let bytes = body.as_bytes();
+    let mut i = 0;
+    let mut total_ns: f64 = 0.0;
+    while i < bytes.len() {
+        // Number: digits with an optional single fractional part.
+        let num_start = i;
+        while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
+            i += 1;
+        }
+        if i == num_start {
+            return Err(anyhow!("invalid duration `{raw}`: expected a number"));
+        }
+        let number: f64 = body[num_start..i]
+            .parse()
+            .map_err(|_| anyhow!("invalid number in duration `{raw}`"))?;
+        // Unit: a run of non-digit, non-`.` bytes.
+        let unit_start = i;
+        while i < bytes.len() && !bytes[i].is_ascii_digit() && bytes[i] != b'.' {
+            i += 1;
+        }
+        let unit = &body[unit_start..i];
+        if unit.is_empty() {
+            return Err(anyhow!(
+                "missing unit in duration `{raw}` (e.g. ms, s, m, h)"
+            ));
+        }
+        let ns =
+            unit_ns(unit).ok_or_else(|| anyhow!("unknown duration unit `{unit}` in `{raw}`"))?;
+        total_ns += number * ns;
+    }
+    if neg {
+        total_ns = -total_ns;
+    }
+    let nanos = total_ns.trunc() as i64;
+    Ok(json!({
+        "duration": raw,
+        "nanos": nanos,
+        "seconds": nanos as f64 / 1_000_000_000.0,
+    }))
+}
+
+/// Format a nanosecond count as a Go `time.Duration` string — the inverse of
+/// `parse_duration`, matching Go's `Duration.String()`: the largest whole units
+/// first (`h`, `m`, `s`), and sub-second remainders rendered in the largest unit
+/// that keeps the value exact (`ms`, `us`, `ns`). Zero is `"0s"`. A negative
+/// count gets a leading `-`. opts: `nanos` (or `value`). Returns `{nanos,
+/// duration}`. Pure.
+fn op_format_duration(opts: Value) -> Result<Value> {
+    let nanos = opts
+        .get("nanos")
+        .or_else(|| opts.get("value"))
+        .and_then(Value::as_i64)
+        .ok_or_else(|| anyhow!("missing nanos"))?;
+    if nanos == 0 {
+        return Ok(json!({"nanos": 0, "duration": "0s"}));
+    }
+    let neg = nanos < 0;
+    let mut n = nanos.unsigned_abs();
+    let mut out = String::new();
+    // Sub-second part is rendered as a single fractional unit (ns/us/ms);
+    // at-or-above one second uses h/m/s like Go.
+    if n < 1_000_000_000 {
+        let (div, unit) = if n % 1_000_000 == 0 {
+            (1_000_000, "ms")
+        } else if n % 1_000 == 0 {
+            (1_000, "us")
+        } else {
+            (1, "ns")
+        };
+        out.push_str(&format!("{}{}", n / div, unit));
+    } else {
+        let h = n / 3_600_000_000_000;
+        n %= 3_600_000_000_000;
+        let m = n / 60_000_000_000;
+        n %= 60_000_000_000;
+        // Seconds may carry a fraction; trim trailing zeros like Go.
+        let secs = n as f64 / 1_000_000_000.0;
+        if h > 0 {
+            out.push_str(&format!("{h}h"));
+        }
+        if m > 0 || h > 0 {
+            out.push_str(&format!("{m}m"));
+        }
+        // In the h/m/s branch Go always prints the seconds component, even
+        // when it is exactly zero (`2m` → "2m0s", `1h` → "1h0m0s").
+        out.push_str(&format!("{secs}s"));
+    }
+    if neg {
+        out.insert(0, '-');
+    }
+    Ok(json!({"nanos": nanos, "duration": out}))
+}
+
+/// Parse a `docker run --cpus` value into the engine's NanoCPUs integer. Docker
+/// multiplies the (possibly fractional) CPU count by 1e9: `--cpus 1.5` →
+/// `1500000000` NanoCPUs, `--cpus 0.5` → `500000000`. The value must be a
+/// positive number. opts: `cpus` (or `value`, accepts a string or a JSON
+/// number). Returns `{cpus, nano_cpus}`. Pure.
+fn op_parse_cpus(opts: Value) -> Result<Value> {
+    let raw = opts
+        .get("cpus")
+        .or_else(|| opts.get("value"))
+        .ok_or_else(|| anyhow!("missing cpus"))?;
+    let cpus: f64 = match raw {
+        Value::Number(n) => n.as_f64().ok_or_else(|| anyhow!("invalid cpus"))?,
+        Value::String(s) => s
+            .trim()
+            .parse()
+            .map_err(|_| anyhow!("invalid cpus value: `{s}`"))?,
+        _ => return Err(anyhow!("cpus must be a number or numeric string")),
+    };
+    if cpus <= 0.0 {
+        return Err(anyhow!("cpus must be a positive number, got {cpus}"));
+    }
+    // Engine rounds to the nearest nanocpu (1e9 per CPU).
+    let nano_cpus = (cpus * 1_000_000_000.0).round() as i64;
+    Ok(json!({"cpus": cpus, "nano_cpus": nano_cpus}))
+}
+
+/// Parse a `docker run --tmpfs` spec `path[:opts]` into its parts. The mount
+/// path (required, absolute) is everything before the FIRST `:`; the remainder
+/// is the comma-separated mount-option list (`ro`, `rw`, `noexec`, `nosuid`,
+/// `size=64m`, `mode=1777`, …) — each option split into `{key, value}` (value
+/// null for a flag like `ro`). opts: `spec` (or `tmpfs`). Returns `{spec, path,
+/// readonly, options}` where `options` is the list of `{key, value}`. Pure.
+fn op_parse_tmpfs(opts: Value) -> Result<Value> {
+    let spec = opts
+        .get("spec")
+        .or_else(|| opts.get("tmpfs"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing spec"))?;
+    let (path, opt_str) = match spec.split_once(':') {
+        Some((p, o)) => (p, o),
+        None => (spec, ""),
+    };
+    if path.is_empty() {
+        return Err(anyhow!("tmpfs path must not be empty: `{spec}`"));
+    }
+    let options: Vec<Value> = opt_str
+        .split(',')
+        .filter(|o| !o.is_empty())
+        .map(|o| match o.split_once('=') {
+            Some((k, v)) => json!({"key": k, "value": v}),
+            None => json!({"key": o, "value": Value::Null}),
+        })
+        .collect();
+    let readonly = options
+        .iter()
+        .any(|o| o["key"] == json!("ro") && o["value"] == Value::Null);
+    Ok(json!({
+        "spec": spec,
+        "path": path,
+        "readonly": readonly,
+        "options": options,
+    }))
+}
+
+/// Assemble a `--tmpfs` spec from parts — the inverse of `parse_tmpfs`. With no
+/// options it emits the bare `path`; otherwise `path:opt[,opt…]` where each
+/// option is a string (`ro`) or a `key=value` pair built from `{key, value}`.
+/// A truthy `readonly` appends `ro` when not already present. opts: `path`
+/// (required), `options` (array of strings or `{key, value}`), `readonly`.
+/// Returns `{spec}`. Pure.
+fn op_build_tmpfs(opts: Value) -> Result<Value> {
+    let path = opts
+        .get("path")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("missing path"))?;
+    let mut parts: Vec<String> = opts
+        .get("options")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|o| match o {
+                    Value::String(s) if !s.is_empty() => Some(s.clone()),
+                    Value::Object(_) => {
+                        let k = o.get("key").and_then(Value::as_str)?;
+                        match o.get("value") {
+                            None | Some(Value::Null) => Some(k.to_string()),
+                            Some(Value::String(v)) => Some(format!("{k}={v}")),
+                            Some(Value::Number(v)) => Some(format!("{k}={v}")),
+                            _ => Some(k.to_string()),
+                        }
+                    }
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let readonly = matches!(opts.get("readonly"), Some(Value::Bool(true)))
+        || matches!(opts.get("readonly"), Some(Value::Number(n)) if n.as_i64() != Some(0))
+        || matches!(opts.get("readonly"), Some(Value::String(s)) if s == "1" || s == "true");
+    if readonly && !parts.iter().any(|p| p == "ro") {
+        parts.push("ro".to_string());
+    }
+    let spec = if parts.is_empty() {
+        path.to_string()
+    } else {
+        format!("{path}:{}", parts.join(","))
+    };
+    Ok(json!({"spec": spec}))
+}
+
 // ── exports ─────────────────────────────────────────────────────────────────
 
 #[no_mangle]
@@ -2157,6 +2425,11 @@ pub extern "C" fn docker__resize(args: *const c_char) -> *const c_char {
 }
 
 #[no_mangle]
+pub extern "C" fn docker__resize_exec(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, op_resize_exec)
+}
+
+#[no_mangle]
 pub extern "C" fn docker__parse_image_ref(args: *const c_char) -> *const c_char {
     ffi_call_async(args, |opts| async move { op_parse_image_ref(opts) })
 }
@@ -2284,6 +2557,31 @@ pub extern "C" fn docker__build_device(args: *const c_char) -> *const c_char {
 #[no_mangle]
 pub extern "C" fn docker__parse_signal(args: *const c_char) -> *const c_char {
     ffi_call_async(args, |opts| async move { op_parse_signal(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__parse_duration(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_parse_duration(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__format_duration(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_format_duration(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__parse_cpus(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_parse_cpus(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__parse_tmpfs(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_parse_tmpfs(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__build_tmpfs(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_build_tmpfs(opts) })
 }
 
 #[cfg(test)]
@@ -2691,6 +2989,7 @@ mod tests {
             (docker__network_disconnect, "missing network"),
             (docker__exec_inspect, "missing id"),
             (docker__resize, "missing container"),
+            (docker__resize_exec, "missing id"),
         ] {
             let v = call_export(f, "{}");
             assert_eq!(
@@ -3603,5 +3902,178 @@ mod tests {
         assert!(op_parse_signal(json!({"signal": -1})).is_err());
         assert!(op_parse_signal(json!({"signal": "SIG"})).is_err());
         assert!(op_parse_signal(json!({})).is_err());
+    }
+
+    #[test]
+    fn parse_duration_matches_go_parse_duration() {
+        let ns = |s: &str| {
+            op_parse_duration(json!({ "duration": s })).unwrap()["nanos"]
+                .as_i64()
+                .unwrap()
+        };
+        // Single-unit forms across the whole unit range.
+        assert_eq!(ns("0"), 0);
+        assert_eq!(ns("1ns"), 1);
+        assert_eq!(ns("1us"), 1_000);
+        assert_eq!(ns("1µs"), 1_000, "micro sign µs is accepted like Go");
+        assert_eq!(ns("300ms"), 300_000_000);
+        assert_eq!(ns("5s"), 5_000_000_000);
+        assert_eq!(ns("2m"), 120_000_000_000);
+        assert_eq!(ns("1h"), 3_600_000_000_000);
+        // Compound, no separators (Go's `1h30m`).
+        assert_eq!(ns("1h30m"), 3_600_000_000_000 + 30 * 60_000_000_000);
+        assert_eq!(ns("2h45m30s"), 9930 * 1_000_000_000);
+        // Fractional values.
+        assert_eq!(ns("1.5h"), 5_400_000_000_000);
+        assert_eq!(ns("0.5s"), 500_000_000);
+        // Sign handling.
+        assert_eq!(ns("-30s"), -30_000_000_000);
+        // The seconds float is consistent with the nanos.
+        let v = op_parse_duration(json!({"duration": "1h30m"})).unwrap();
+        assert_eq!(v["seconds"], json!(5400.0));
+        // `value` alias.
+        assert_eq!(
+            op_parse_duration(json!({"value": "250ms"})).unwrap()["nanos"],
+            json!(250_000_000)
+        );
+        // Errors: empty, a bare unitless number, an unknown unit, missing key.
+        assert!(op_parse_duration(json!({"duration": ""})).is_err());
+        assert!(
+            op_parse_duration(json!({"duration": "100"})).is_err(),
+            "a unitless non-zero number is invalid like Go"
+        );
+        assert!(op_parse_duration(json!({"duration": "5y"})).is_err());
+        assert!(op_parse_duration(json!({})).is_err());
+    }
+
+    #[test]
+    fn format_duration_inverts_parse_for_canonical_forms() {
+        let fmt = |n: i64| {
+            op_format_duration(json!({ "nanos": n })).unwrap()["duration"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(fmt(0), "0s");
+        assert_eq!(fmt(1), "1ns");
+        assert_eq!(fmt(1_000), "1us");
+        assert_eq!(fmt(300_000_000), "300ms");
+        assert_eq!(fmt(5_000_000_000), "5s");
+        assert_eq!(fmt(120_000_000_000), "2m0s");
+        assert_eq!(fmt(3_600_000_000_000), "1h0m0s");
+        assert_eq!(fmt(5_400_000_000_000), "1h30m0s");
+        assert_eq!(fmt(-30_000_000_000), "-30s");
+        // Round-trip: format(parse(x)) preserves the nanos for several inputs.
+        for s in ["300ms", "5s", "1h30m", "2h45m30s", "1.5h", "250ms"] {
+            let parsed = op_parse_duration(json!({ "duration": s })).unwrap()["nanos"]
+                .as_i64()
+                .unwrap();
+            let formatted = op_format_duration(json!({ "nanos": parsed })).unwrap()["duration"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let reparsed = op_parse_duration(json!({ "duration": formatted })).unwrap()["nanos"]
+                .as_i64()
+                .unwrap();
+            assert_eq!(parsed, reparsed, "round-trip nanos for `{s}`");
+        }
+        assert!(op_format_duration(json!({})).is_err());
+    }
+
+    #[test]
+    fn parse_cpus_scales_to_nanocpus() {
+        let nano = |v: Value| {
+            op_parse_cpus(json!({ "cpus": v })).unwrap()["nano_cpus"]
+                .as_i64()
+                .unwrap()
+        };
+        // Docker multiplies --cpus by 1e9.
+        assert_eq!(nano(json!(1)), 1_000_000_000);
+        assert_eq!(nano(json!(1.5)), 1_500_000_000);
+        assert_eq!(nano(json!(0.5)), 500_000_000);
+        // String form parses identically.
+        assert_eq!(nano(json!("2.5")), 2_500_000_000);
+        // `value` alias.
+        assert_eq!(
+            op_parse_cpus(json!({"value": "0.25"})).unwrap()["nano_cpus"],
+            json!(250_000_000)
+        );
+        // Errors: non-positive, non-numeric, missing.
+        assert!(op_parse_cpus(json!({"cpus": 0})).is_err());
+        assert!(op_parse_cpus(json!({"cpus": -1})).is_err());
+        assert!(op_parse_cpus(json!({"cpus": "abc"})).is_err());
+        assert!(op_parse_cpus(json!({})).is_err());
+    }
+
+    #[test]
+    fn parse_tmpfs_splits_path_and_options() {
+        // Bare path: no options, not readonly.
+        let v = op_parse_tmpfs(json!({"spec": "/run"})).unwrap();
+        assert_eq!(v["path"], json!("/run"));
+        assert_eq!(v["readonly"], json!(false));
+        assert_eq!(v["options"], json!([]));
+        // Path + flag + key=value options.
+        let v = op_parse_tmpfs(json!({"spec": "/tmp:ro,size=64m,mode=1777"})).unwrap();
+        assert_eq!(v["path"], json!("/tmp"));
+        assert_eq!(v["readonly"], json!(true));
+        assert_eq!(
+            v["options"],
+            json!([
+                {"key": "ro", "value": null},
+                {"key": "size", "value": "64m"},
+                {"key": "mode", "value": "1777"},
+            ])
+        );
+        // `tmpfs` alias.
+        assert_eq!(
+            op_parse_tmpfs(json!({"tmpfs": "/cache"})).unwrap()["path"],
+            json!("/cache")
+        );
+        // Errors: empty path, missing.
+        assert!(op_parse_tmpfs(json!({"spec": ":ro"})).is_err());
+        assert!(op_parse_tmpfs(json!({})).is_err());
+    }
+
+    #[test]
+    fn build_tmpfs_inverts_parse_tmpfs() {
+        let spec = |v: Value| {
+            op_build_tmpfs(v).unwrap()["spec"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        // Bare path.
+        assert_eq!(spec(json!({"path": "/run"})), "/run");
+        // String options.
+        assert_eq!(
+            spec(json!({"path": "/tmp", "options": ["ro", "size=64m"]})),
+            "/tmp:ro,size=64m"
+        );
+        // `{key, value}` options (the shape parse_tmpfs returns).
+        assert_eq!(
+            spec(json!({"path": "/tmp", "options": [
+                {"key": "ro", "value": null},
+                {"key": "size", "value": "64m"},
+            ]})),
+            "/tmp:ro,size=64m"
+        );
+        // `readonly` appends `ro` once.
+        assert_eq!(spec(json!({"path": "/tmp", "readonly": true})), "/tmp:ro");
+        assert_eq!(
+            spec(json!({"path": "/tmp", "options": ["ro"], "readonly": true})),
+            "/tmp:ro",
+            "readonly does not duplicate an existing ro"
+        );
+        // Round-trip a parsed spec back to the same string.
+        for s in ["/run", "/tmp:ro,size=64m,mode=1777"] {
+            let p = op_parse_tmpfs(json!({ "spec": s })).unwrap();
+            let rebuilt = op_build_tmpfs(json!({
+                "path": p["path"], "options": p["options"],
+            }))
+            .unwrap()["spec"]
+                .clone();
+            assert_eq!(rebuilt, json!(s), "round-trip for `{s}`");
+        }
+        assert!(op_build_tmpfs(json!({})).is_err());
     }
 }

@@ -310,4 +310,49 @@ assert_eq Docker::parse_signal("KILL")->{number}, 9,    "parse_signal: name reso
 assert_ok !defined(Docker::parse_signal(64)->{name}),  "parse_signal: unknown number has no name"
 assert_dies fn { Docker::parse_signal("") }, "parse_signal: empty signal dies"
 
+# parse_duration: Go time.ParseDuration → nanoseconds (the Docker time-flag format).
+assert_eq Docker::parse_duration("300ms")->{nanos}, 300000000,    "parse_duration: 300ms"
+assert_eq Docker::parse_duration("5s")->{nanos},    5000000000,   "parse_duration: 5s"
+assert_eq Docker::parse_duration("1h30m")->{nanos}, 5400000000000, "parse_duration: compound 1h30m"
+assert_eq Docker::parse_duration("1.5h")->{nanos},  5400000000000, "parse_duration: fractional 1.5h"
+assert_eq Docker::parse_duration("0")->{nanos},     0,            "parse_duration: bare zero"
+assert_eq Docker::parse_duration("1h30m")->{seconds}, 5400,       "parse_duration: seconds field"
+assert_dies fn { Docker::parse_duration("100") }, "parse_duration: a unitless non-zero number dies"
+assert_dies fn { Docker::parse_duration("5y") },  "parse_duration: an unknown unit dies"
+
+# format_duration: inverse of parse_duration (nanoseconds → Go duration string).
+assert_eq Docker::format_duration(0)->{duration},            "0s",      "format_duration: zero"
+assert_eq Docker::format_duration(300000000)->{duration},    "300ms",   "format_duration: 300ms"
+assert_eq Docker::format_duration(5400000000000)->{duration}, "1h30m0s", "format_duration: 1h30m"
+for val $spec (qw(300ms 5s 1h30m 2h45m30s 250ms)) {
+    val $nanos = Docker::parse_duration($spec)->{nanos}
+    val $back  = Docker::format_duration($nanos)->{duration}
+    assert_eq Docker::parse_duration($back)->{nanos}, $nanos, "format_duration: round-trips nanos for $spec"
+}
+
+# parse_cpus: --cpus → NanoCPUs (engine multiplies by 1e9).
+assert_eq Docker::parse_cpus(1)->{nano_cpus},     1000000000, "parse_cpus: 1 CPU"
+assert_eq Docker::parse_cpus(1.5)->{nano_cpus},   1500000000, "parse_cpus: 1.5 CPUs"
+assert_eq Docker::parse_cpus("0.5")->{nano_cpus}, 500000000,  "parse_cpus: string 0.5"
+assert_dies fn { Docker::parse_cpus(0) },     "parse_cpus: zero dies"
+assert_dies fn { Docker::parse_cpus("abc") }, "parse_cpus: non-numeric dies"
+
+# parse_tmpfs: --tmpfs path[:opts].
+assert_eq Docker::parse_tmpfs("/run")->{path},      "/run", "parse_tmpfs: bare path"
+assert_eq Docker::parse_tmpfs("/run")->{readonly},  0,      "parse_tmpfs: bare path is read-write"
+val $tf = Docker::parse_tmpfs("/tmp:ro,size=64m")
+assert_eq $tf->{path},     "/tmp", "parse_tmpfs: path with options"
+assert_eq $tf->{readonly}, 1,      "parse_tmpfs: ro sets readonly"
+assert_eq scalar(@{ $tf->{options} }), 2, "parse_tmpfs: option count"
+assert_dies fn { Docker::parse_tmpfs(":ro") }, "parse_tmpfs: empty path dies"
+
+# build_tmpfs: inverse of parse_tmpfs.
+assert_eq Docker::build_tmpfs(path => "/run"), "/run", "build_tmpfs: bare path"
+assert_eq Docker::build_tmpfs(path => "/tmp", options => ["ro", "size=64m"]), "/tmp:ro,size=64m", "build_tmpfs: option list"
+assert_eq Docker::build_tmpfs(path => "/tmp", readonly => 1), "/tmp:ro", "build_tmpfs: readonly appends ro"
+for val $spec (qw(/run /tmp:ro,size=64m)) {
+    val $p = Docker::parse_tmpfs($spec)
+    assert_eq Docker::build_tmpfs(path => $p->{path}, options => $p->{options}), $spec, "build_tmpfs: round-trips $spec"
+}
+
 test_run

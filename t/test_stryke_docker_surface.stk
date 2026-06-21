@@ -74,6 +74,7 @@ assert_ok exists &Docker::network_connect, "Docker::network_connect exists"
 assert_ok exists &Docker::network_disconnect, "Docker::network_disconnect exists"
 assert_ok exists &Docker::exec_inspect, "Docker::exec_inspect exists"
 assert_ok exists &Docker::resize, "Docker::resize exists"
+assert_ok exists &Docker::resize_exec, "Docker::resize_exec exists"
 
 # ── pure parse helpers ──
 assert_ok exists &Docker::parse_image_ref, "Docker::parse_image_ref exists"
@@ -102,5 +103,10 @@ assert_ok exists &Docker::build_label, "Docker::build_label exists"
 assert_ok exists &Docker::parse_device, "Docker::parse_device exists"
 assert_ok exists &Docker::build_device, "Docker::build_device exists"
 assert_ok exists &Docker::parse_signal, "Docker::parse_signal exists"
+assert_ok exists &Docker::parse_duration, "Docker::parse_duration exists"
+assert_ok exists &Docker::format_duration, "Docker::format_duration exists"
+assert_ok exists &Docker::parse_cpus, "Docker::parse_cpus exists"
+assert_ok exists &Docker::parse_tmpfs, "Docker::parse_tmpfs exists"
+assert_ok exists &Docker::build_tmpfs, "Docker::build_tmpfs exists"
 
 test_run

@@ -204,6 +204,14 @@ fn Docker::resize ($container, $width, $height, %opts) {
         docker__resize(to_json(Docker::_req({ container => $container, width => $width, height => $height }, \%opts))))->{ok} ? 1 : 0
 }
 
+## Resize a running exec instance's TTY to $width x $height character cells —
+## the exec counterpart of Docker::resize. $id is the exec id from create_exec.
+## Returns 1 on success.
+fn Docker::resize_exec ($id, $width, $height, %opts) {
+    Docker::_decode("resize_exec",
+        docker__resize_exec(to_json(Docker::_req({ id => $id, width => $width, height => $height }, \%opts))))->{ok} ? 1 : 0
+}
+
 # ── images ──────────────────────────────────────────────────────────
 
 ## List images; `all => 1` includes intermediate layers.
@@ -590,5 +598,47 @@ fn Docker::build_device (%opts) {
 ## (number undef when not resolvable from the name).
 fn Docker::parse_signal ($signal) {
     Docker::_decode("parse_signal", docker__parse_signal(to_json({ signal => $signal })))
+}
+
+## Parse a Go time.ParseDuration string (the format every Docker time flag uses:
+## --health-interval, --health-timeout, --stop-timeout, …) into nanoseconds.
+## Accepts compound unit runs with no separators ("1h30m", "2h45m30s"),
+## fractions ("1.5h"), and a leading sign; units are ns/us/µs/ms/s/m/h. A bare
+## "0" is allowed; any other unitless number dies. Returns a hashref
+## { duration, nanos, seconds }.
+fn Docker::parse_duration ($duration) {
+    Docker::_decode("parse_duration", docker__parse_duration(to_json({ duration => $duration })))
+}
+
+## Format a nanosecond count as a Go time.Duration string — the inverse of
+## parse_duration, matching Go's Duration.String() (largest whole units first,
+## sub-second remainders in the largest exact unit). Zero is "0s". Returns a
+## hashref { nanos, duration }.
+fn Docker::format_duration ($nanos) {
+    Docker::_decode("format_duration", docker__format_duration(to_json({ nanos => $nanos })))
+}
+
+## Parse a `docker run --cpus` value into the engine's NanoCPUs integer (Docker
+## multiplies the CPU count by 1e9: 1.5 → 1500000000). Accepts a number or a
+## numeric string; the value must be positive. Returns a hashref
+## { cpus, nano_cpus }.
+fn Docker::parse_cpus ($cpus) {
+    Docker::_decode("parse_cpus", docker__parse_cpus(to_json({ cpus => $cpus })))
+}
+
+## Parse a `docker run --tmpfs` spec "path[:opts]" into a hashref
+## { spec, path, readonly, options }. The path is everything before the FIRST
+## colon; options is the comma list after it, each split into { key, value }
+## (value undef for a flag like "ro"). "ro" sets readonly.
+fn Docker::parse_tmpfs ($spec) {
+    Docker::_decode("parse_tmpfs", docker__parse_tmpfs(to_json({ spec => $spec })))
+}
+
+## Assemble a --tmpfs spec from parts — inverse of parse_tmpfs. %opts: path
+## (required), options (arrayref of strings or { key, value } hashes), readonly
+## (truthy appends "ro"). With no options it emits the bare path. Returns the
+## spec string.
+fn Docker::build_tmpfs (%opts) {
+    Docker::_decode("build_tmpfs", docker__build_tmpfs(to_json(\%opts)))->{spec}
 }
 

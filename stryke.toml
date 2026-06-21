@@ -57,6 +57,7 @@ exports = [
     "docker__network_disconnect",
     "docker__exec_inspect",
     "docker__resize",
+    "docker__resize_exec",
     "docker__parse_image_ref",
     "docker__normalize_image_ref",
     "docker__build_image_ref",
@@ -83,6 +84,11 @@ exports = [
     "docker__parse_device",
     "docker__build_device",
     "docker__parse_signal",
+    "docker__parse_duration",
+    "docker__format_duration",
+    "docker__parse_cpus",
+    "docker__parse_tmpfs",
+    "docker__build_tmpfs",
 ]
 
 [scripts]

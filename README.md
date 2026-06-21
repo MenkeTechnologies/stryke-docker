@@ -163,6 +163,7 @@ Docker::logs_follow  $container, %opts → dies      # streaming — deferred in
 Docker::exec         $container, \@cmd, %opts → $output   # captured stdout+stderr
 Docker::exec_inspect $id, %opts → \%info               # exec exit code / running / pid
 Docker::resize       $container, $width, $height, %opts → 1 | 0   # resize the container TTY
+Docker::resize_exec  $id, $width, $height, %opts → 1 | 0   # resize an exec instance's TTY
 Docker::stats        $container, %opts → \%snapshot   # one-shot stats (--no-stream)
 Docker::diff         $container, %opts → @{ {Path, Kind} }   # fs changes vs image (0 mod,1 add,2 del)
 Docker::history      $image, %opts → @layers           # image build history
@@ -203,6 +204,11 @@ Docker::build_label($key, $value?) → $spec    # KEY=VALUE, or bare KEY when va
 Docker::parse_device($spec)  → { spec, host_path, container_path, permissions }   # --device host[:container[:perms]]; container defaults to host, perms default rwm
 Docker::build_device(%opts)  → $spec          # { host_path, container_path?, permissions? } → shortest --device spec; inverse of parse_device
 Docker::parse_signal($signal) → { signal, name, number }   # normalize a signal name/number to SIG-form (9 / KILL / sigkill → SIGKILL)
+Docker::parse_duration($duration) → { duration, nanos, seconds }   # Go time.ParseDuration (--health-interval, --stop-timeout, …): 1h30m, 1.5h, 300ms → nanoseconds
+Docker::format_duration($nanos) → { nanos, duration }   # inverse: nanoseconds → Go duration string (5400000000000 → 1h30m0s)
+Docker::parse_cpus($cpus) → { cpus, nano_cpus }   # --cpus → NanoCPUs (engine ×1e9; 1.5 → 1500000000)
+Docker::parse_tmpfs($spec) → { spec, path, readonly, options }   # --tmpfs path[:opts]; options split into { key, value }; ro sets readonly
+Docker::build_tmpfs(%opts) → $spec   # { path, options?, readonly? } → --tmpfs spec; inverse of parse_tmpfs
 ```
 
 `parse_mount` classifies a `-v` short mount: a host-path source (`/`, `.`, `~`)
