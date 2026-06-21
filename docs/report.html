@@ -97,9 +97,11 @@
       <p class="tutorial-subtitle"><code>bollard</code> + tokio for full daemon-API coverage &mdash; opt-in so the stryke core binary stays under 40 MB.</p>
 
       <div class="stat-grid">
+        <div class="stat-card"><div class="stat-val">0.19.0</div><div class="stat-label">Version</div></div>
         <div class="stat-card"><div class="stat-val">cdylib</div><div class="stat-label">Crate type</div></div>
         <div class="stat-card"><div class="stat-val cyan">opt-in</div><div class="stat-label">Tier</div></div>
         <div class="stat-card"><div class="stat-val cyan">dlopen</div><div class="stat-label">Load model</div></div>
+        <div class="stat-card"><div class="stat-val green">78</div><div class="stat-label">FFI exports</div></div>
         <div class="stat-card"><div class="stat-val">JSON-over-FFI</div><div class="stat-label">Envelope</div></div>
       </div>
 
@@ -126,13 +128,42 @@
 
       <hr class="section-rule">
       <h2 class="tutorial-title"><span class="step-hash">&amp;</span>FFI ENVELOPE</h2>
-      <p>JSON in / JSON out across the FFI boundary. Each <code>Docker::*</code> wrapper serializes its args to a JSON dict and calls the matching <code>docker__*</code> symbol resolved out of <code>libstryke_docker.{dylib,so}</code>; the cdylib returns a JSON <code>CString</code> the wrapper parses. The exports cover containers, images, networks, volumes, exec, logs, and prune, plus daemon-free helpers (<code>docker__parse_image_ref</code>, <code>docker__valid_container_name</code>, <code>docker__parse_port_spec</code>); the authoritative list is <code>[ffi].exports</code> in <code>stryke.toml</code>. The returned <code>CString</code> is freed via the cdylib-exported <code>stryke_free_cstring</code>, wired automatically by <code>rust_ffi::load_cdylib</code>.</p>
-<pre># request shape (built by the .stk wrapper)
-{"verb": "&lt;op&gt;", "...": ...}
+      <p>JSON in / JSON out across the FFI boundary. Each <code>Docker::*</code> wrapper serializes its args to a JSON dict and calls the matching <code>docker__*</code> symbol resolved out of <code>libstryke_docker.{dylib,so}</code>; the cdylib returns a JSON <code>CString</code> the wrapper parses. Dispatch is by symbol name &mdash; there is no <code>verb</code> field in the payload; the wrapper sends the call-specific keys (<code>container</code>, <code>image</code>, <code>tail</code>, &hellip;) plus an optional <code>host</code> connection override. The exports cover containers (including network attach/detach, TTY resize, exec inspect), images (including search + registry inspect), networks, volumes, exec, logs, and prune, plus the daemon-free parse/validate/build helpers; the authoritative list is <code>[ffi].exports</code> in <code>stryke.toml</code> (78 exported symbols). The returned <code>CString</code> is freed via the cdylib-exported <code>stryke_free_cstring</code>, wired automatically by stryke's cdylib loader.</p>
+<pre># request shape (built by the .stk wrapper; dispatched by symbol name)
+docker__stop({"container": "web", "timeout": 5})
 
-# response shape
-{"result": ...}            # success — per-fn shape
-{"error": "&lt;msg&gt;"}        # failure — wrapper die()s with the message</pre>
+# success — the per-fn result object, returned as-is (NOT wrapped in {"result": ...})
+{"ok": true}
+
+# failure — wrapper _decode() die()s with the message
+{"error": "&lt;msg&gt;"}</pre>
+      <p>A handler panic is caught (<code>catch_unwind</code>) and returned as the same <code>{"error": "&hellip;"}</code> shape, so a bad call cannot abort the host process. Null or malformed arguments decode to <code>Value::Null</code> rather than segfaulting &mdash; both paths are pinned by the crate's FFI safety tests.</p>
+
+      <hr class="section-rule">
+      <h2 class="tutorial-title"><span class="step-hash">+</span>PERSISTENT STATE</h2>
+      <p>Two process-lifetime singletons replace the v1 fork-per-call helper:</p>
+      <table class="arch-table">
+        <thead><tr><th>Singleton</th><th>Role</th></tr></thead>
+        <tbody>
+          <tr><td><code>RUNTIME</code></td><td>One shared <code>tokio</code> multi-thread runtime drives every async daemon call; the blocking FFI entrypoints <code>block_on</code> against it.</td></tr>
+          <tr><td><code>CLIENTS</code></td><td><code>bollard::Docker</code> cache keyed by <code>DOCKER_HOST</code> (socket path / tcp url). The same client + underlying HTTP connection pool is reused across calls instead of reconnecting per operation.</td></tr>
+        </tbody>
+      </table>
+
+      <hr class="section-rule">
+      <h2 class="tutorial-title"><span class="step-hash">=</span>SCOPE: DAEMON OPS vs PURE HELPERS</h2>
+      <p>The surface splits cleanly. Daemon ops need a reachable socket and <code>die</code> on daemon errors. The pure helpers &mdash; the <code>parse_* / valid_* / build_* / normalize_* / format_*</code> family for Docker's CLI spec grammars (image refs, ports, mounts, env, labels, devices, tmpfs, restart policies, platforms, memory, durations, cpus, signals, ulimits) &mdash; touch no socket, are deterministic, and are what <code>cargo test</code> exercises without a live daemon.</p>
+      <table class="arch-table">
+        <thead><tr><th>Capability</th><th>Status in 0.19.0</th></tr></thead>
+        <tbody>
+          <tr><td>Snapshot ops (<code>ps</code>, <code>inspect</code>, <code>logs</code>, <code>exec</code>, lifecycle, <code>stats --no-stream</code>, prune)</td><td>shipped</td></tr>
+          <tr><td>Pure parse/validate/build helpers</td><td>shipped</td></tr>
+          <tr><td>Streaming (<code>logs_follow</code>, <code>events</code>)</td><td>deferred &mdash; needs a callback FFI shape</td></tr>
+          <tr><td>Registry-auth / tar (<code>push</code>, <code>build</code>)</td><td>deferred &mdash; needs auth / tar-stream design</td></tr>
+          <tr><td>TLS client certs (<code>DOCKER_CERT_PATH</code> / <code>DOCKER_TLS_VERIFY</code>)</td><td>roadmap</td></tr>
+        </tbody>
+      </table>
+      <p>Calling a deferred op raises a <code>die</code> naming the op and the missing substrate &mdash; scripts fail loudly rather than returning partial data.</p>
 
       <hr class="section-rule">
       <h2 class="tutorial-title"><span class="step-hash">/</span>SCOPE</h2>
@@ -143,6 +174,8 @@
       <table class="arch-table">
         <thead><tr><th>Item</th><th>Value</th></tr></thead>
         <tbody>
+          <tr><td>Version</td><td>0.19.0 (<code>stryke.toml</code> / <code>Cargo.toml</code>; <code>publish = false</code>)</td></tr>
+          <tr><td>FFI exports</td><td>78 <code>docker__*</code> symbols (<code>[ffi].exports</code> in <code>stryke.toml</code>)</td></tr>
           <tr><td>License</td><td>MIT</td></tr>
           <tr><td>Author</td><td><a href="https://github.com/MenkeTechnologies">MenkeTechnologies</a></td></tr>
           <tr><td>Repository</td><td><a href="https://github.com/MenkeTechnologies/stryke-docker">github.com/MenkeTechnologies/stryke-docker</a></td></tr>
