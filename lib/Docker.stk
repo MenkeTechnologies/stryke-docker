@@ -190,6 +190,20 @@ fn Docker::exec ($container, $cmd, %opts) {
     Docker::_decode("exec", docker__exec(to_json($r)))->{output}
 }
 
+## Inspect a previously-created exec instance by its $id — exit code, running
+## flag, pid. Returns the raw inspect document.
+fn Docker::exec_inspect ($id, %opts) {
+    Docker::_decode("exec_inspect",
+        docker__exec_inspect(to_json(Docker::_req({ id => $id }, \%opts))))
+}
+
+## Resize $container's TTY to $width x $height character cells. Returns 1 on
+## success.
+fn Docker::resize ($container, $width, $height, %opts) {
+    Docker::_decode("resize",
+        docker__resize(to_json(Docker::_req({ container => $container, width => $width, height => $height }, \%opts))))->{ok} ? 1 : 0
+}
+
 # ── images ──────────────────────────────────────────────────────────
 
 ## List images; `all => 1` includes intermediate layers.
@@ -222,6 +236,21 @@ fn Docker::tag ($source, $target, %opts) {
         docker__tag(to_json(Docker::_req({ source => $source, target => $target }, \%opts))))->{ok} ? 1 : 0
 }
 
+## Search Docker Hub for images matching $term. opt `limit` caps the result
+## count. Returns the list of result hashes (name, description, stars, …).
+fn Docker::search ($term, %opts) {
+    val $o = Docker::_decode("search",
+        docker__search(to_json(Docker::_req({ term => $term, limit => $opts{limit} }, \%opts))))
+    @{ $o->{results} }
+}
+
+## Registry-side metadata for $image WITHOUT pulling it (the distribution
+## descriptor + platforms). Returns the raw distribution document.
+fn Docker::inspect_registry ($image, %opts) {
+    Docker::_decode("inspect_registry",
+        docker__inspect_registry(to_json(Docker::_req({ image => $image }, \%opts))))
+}
+
 ## Build an image — deferred in v0.2.0 cdylib.
 fn Docker::build ($dir, %opts) {
     die "Docker::build: deferred in v0.2.0 cdylib (tar+stream surface needs design)"
@@ -245,6 +274,19 @@ fn Docker::network_create ($name, %opts) {
 fn Docker::network_rm ($name, %opts) {
     Docker::_decode("network_rm",
         docker__network_rm(to_json(Docker::_req({ name => $name }, \%opts))))->{ok} ? 1 : 0
+}
+
+## Attach $container to $network. opt `aliases` (arrayref) sets in-network DNS
+## aliases. Returns 1 on success.
+fn Docker::network_connect ($network, $container, %opts) {
+    Docker::_decode("network_connect",
+        docker__network_connect(to_json(Docker::_req({ network => $network, container => $container, aliases => $opts{aliases} }, \%opts))))->{ok} ? 1 : 0
+}
+
+## Detach $container from $network. opt `force`. Returns 1 on success.
+fn Docker::network_disconnect ($network, $container, %opts) {
+    Docker::_decode("network_disconnect",
+        docker__network_disconnect(to_json(Docker::_req({ network => $network, container => $container, force => ($opts{force} ? \1 : \0) }, \%opts))))->{ok} ? 1 : 0
 }
 
 # ── volumes ─────────────────────────────────────────────────────────
@@ -511,5 +553,42 @@ fn Docker::parse_platform ($platform) {
 ## { platform, os, architecture, variant }.
 fn Docker::build_platform ($opts) {
     Docker::_decode("build_platform", docker__build_platform(to_json($opts)))
+}
+
+## Parse a -l/--label spec into a hashref { spec, key, value }. Splits on the
+## FIRST "=": "KEY=VALUE" sets value (trailing "=" → empty string), a bare "KEY"
+## is a key with an undef value (the `--label KEY` empty-valued form). Empty key
+## dies.
+fn Docker::parse_label ($spec) {
+    Docker::_decode("parse_label", docker__parse_label(to_json({ spec => $spec })))
+}
+
+## Assemble a --label spec from parts — inverse of parse_label. With $value emits
+## "KEY=VALUE" (empty string → "KEY="); without it emits a bare "KEY". Empty key
+## dies. Returns the spec string.
+fn Docker::build_label ($key, $value = undef) {
+    Docker::_decode("build_label", docker__build_label(to_json({ key => $key, value => $value })))->{spec}
+}
+
+## Parse a --device spec "host[:container[:perms]]" into a hashref
+## { spec, host_path, container_path, permissions }. The container path defaults
+## to the host path; cgroup perms default to "rwm" and must be a subset of r/w/m.
+fn Docker::parse_device ($spec) {
+    Docker::_decode("parse_device", docker__parse_device(to_json({ spec => $spec })))
+}
+
+## Assemble a --device spec from parts — inverse of parse_device. Emits the
+## shortest round-tripping form. %opts: host_path (required), container_path
+## (defaults to host_path), permissions (defaults "rwm"). Returns the spec string.
+fn Docker::build_device (%opts) {
+    Docker::_decode("build_device", docker__build_device(to_json(\%opts)))->{spec}
+}
+
+## Normalize a signal name or number to its canonical SIG-prefixed form. Accepts
+## a number (9 → SIGKILL), a name with/without the SIG prefix (any case), and
+## RTMIN+n/RTMAX-n realtime forms. Returns a hashref { signal, name, number }
+## (number undef when not resolvable from the name).
+fn Docker::parse_signal ($signal) {
+    Docker::_decode("parse_signal", docker__parse_signal(to_json({ signal => $signal })))
 }
 

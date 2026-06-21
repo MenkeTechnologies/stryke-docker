@@ -622,6 +622,38 @@ async fn op_image_inspect(opts: Value) -> Result<Value> {
     Ok(to_value(info))
 }
 
+/// Search Docker Hub for images by term (`docker search`). opts: `term`
+/// (required), `limit` (optional max results). Returns `{results: [...]}`.
+async fn op_search(opts: Value) -> Result<Value> {
+    use bollard::image::SearchImagesOptions;
+    let term = opts["term"]
+        .as_str()
+        .ok_or_else(|| anyhow!("missing term"))?
+        .to_string();
+    let d = get_client(&opts)?;
+    let results = d
+        .search_images(SearchImagesOptions::<String> {
+            term,
+            limit: opts["limit"].as_u64(),
+            ..Default::default()
+        })
+        .await?;
+    Ok(json!({"results": to_value(results)}))
+}
+
+/// Registry-side image metadata (`docker manifest inspect` equivalent) — the
+/// distribution descriptor and platforms for an image WITHOUT pulling it. opts:
+/// `image`. Returns the raw distribution document.
+async fn op_inspect_registry(opts: Value) -> Result<Value> {
+    let image = opts["image"]
+        .as_str()
+        .ok_or_else(|| anyhow!("missing image"))?
+        .to_string();
+    let d = get_client(&opts)?;
+    let info = d.inspect_registry_image(&image, None).await?;
+    Ok(to_value(info))
+}
+
 async fn op_volume_inspect(opts: Value) -> Result<Value> {
     let d = get_client(&opts)?;
     let volume = opts["volume"]
@@ -641,6 +673,94 @@ async fn op_network_inspect(opts: Value) -> Result<Value> {
         .inspect_network(network, None::<InspectNetworkOptions<String>>)
         .await?;
     Ok(to_value(info))
+}
+
+/// Attach a container to a network. opts: `network`, `container` (both
+/// required), and an optional `aliases` array of in-network DNS names. Returns
+/// `{ok: true}`.
+async fn op_network_connect(opts: Value) -> Result<Value> {
+    use bollard::models::EndpointSettings;
+    use bollard::network::ConnectNetworkOptions;
+    let network = opts["network"]
+        .as_str()
+        .ok_or_else(|| anyhow!("missing network"))?
+        .to_string();
+    let container = opts["container"]
+        .as_str()
+        .ok_or_else(|| anyhow!("missing container"))?
+        .to_string();
+    let aliases = opts["aliases"].as_array().map(|a| {
+        a.iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect::<Vec<_>>()
+    });
+    let d = get_client(&opts)?;
+    d.connect_network(
+        &network,
+        ConnectNetworkOptions {
+            container,
+            endpoint_config: EndpointSettings {
+                aliases,
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    Ok(json!({"ok": true}))
+}
+
+/// Detach a container from a network. opts: `network`, `container` (both
+/// required), and an optional `force` flag. Returns `{ok: true}`.
+async fn op_network_disconnect(opts: Value) -> Result<Value> {
+    use bollard::network::DisconnectNetworkOptions;
+    let network = opts["network"]
+        .as_str()
+        .ok_or_else(|| anyhow!("missing network"))?
+        .to_string();
+    let container = opts["container"]
+        .as_str()
+        .ok_or_else(|| anyhow!("missing container"))?
+        .to_string();
+    let d = get_client(&opts)?;
+    d.disconnect_network(
+        &network,
+        DisconnectNetworkOptions {
+            container,
+            force: opts["force"].as_bool().unwrap_or(false),
+        },
+    )
+    .await?;
+    Ok(json!({"ok": true}))
+}
+
+/// Inspect a previously-created exec instance by its id (`/exec/{id}/json`) —
+/// exit code, running flag, pid. opts: `id` (the id returned by `create_exec`,
+/// surfaced through stryke as the exec response). Returns the raw inspect doc.
+async fn op_exec_inspect(opts: Value) -> Result<Value> {
+    let id = opts["id"]
+        .as_str()
+        .ok_or_else(|| anyhow!("missing id"))?
+        .to_string();
+    let d = get_client(&opts)?;
+    let info = d.inspect_exec(&id).await?;
+    Ok(to_value(info))
+}
+
+/// Resize a container's TTY (`/containers/{name}/resize`). opts: `container`,
+/// `width`, `height` (the new size in character cells). Returns `{ok: true}`.
+async fn op_resize(opts: Value) -> Result<Value> {
+    use bollard::container::ResizeContainerTtyOptions;
+    let name = container_name(&opts)?.to_string();
+    let width = opts["width"]
+        .as_u64()
+        .ok_or_else(|| anyhow!("missing width"))? as u16;
+    let height = opts["height"]
+        .as_u64()
+        .ok_or_else(|| anyhow!("missing height"))? as u16;
+    let d = get_client(&opts)?;
+    d.resize_container_tty(&name, ResizeContainerTtyOptions { width, height })
+        .await?;
+    Ok(json!({"ok": true}))
 }
 
 // ── FFI plumbing ────────────────────────────────────────────────────────────
@@ -1590,6 +1710,218 @@ fn op_build_platform(opts: Value) -> Result<Value> {
     Ok(json!({ "platform": spec, "os": os, "architecture": arch, "variant": variant_out }))
 }
 
+/// Parse a `docker run --label` spec into its parts. Docker splits on the FIRST
+/// `=`: `KEY=VALUE` sets the value (a trailing `=` gives an empty string), while
+/// a bare `KEY` with no `=` is a key with a null value (the `--label KEY` form
+/// the engine accepts as an empty-valued label). A value may itself contain `=`
+/// (`a=b=c` → value `b=c`). An empty key (`=v`) is rejected. opts: `spec`.
+/// Returns `{spec, key, value}`. Pure.
+fn op_parse_label(opts: Value) -> Result<Value> {
+    let spec = opts
+        .get("spec")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing spec"))?;
+    match spec.split_once('=') {
+        Some((key, value)) => {
+            if key.is_empty() {
+                return Err(anyhow!("label spec has an empty key: `{spec}`"));
+            }
+            Ok(json!({ "spec": spec, "key": key, "value": value }))
+        }
+        None => {
+            if spec.is_empty() {
+                return Err(anyhow!("label spec is empty"));
+            }
+            Ok(json!({ "spec": spec, "key": spec, "value": Value::Null }))
+        }
+    }
+}
+
+/// Assemble a `--label` spec from parts — the inverse of `parse_label`. With a
+/// `value` it emits `KEY=VALUE` (value may be a string or a number; an empty
+/// string yields the trailing-`=` form `KEY=`). Without a `value` it emits a
+/// bare `KEY`. An empty key is rejected. opts: `key` (required), optional
+/// `value`. Returns `{spec}`. Pure.
+fn op_build_label(opts: Value) -> Result<Value> {
+    let key = opts
+        .get("key")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("missing key"))?;
+    let spec = match opts.get("value") {
+        None | Some(Value::Null) => key.to_string(),
+        Some(Value::String(s)) => format!("{key}={s}"),
+        Some(Value::Number(n)) => format!("{key}={n}"),
+        Some(Value::Bool(b)) => format!("{key}={b}"),
+        Some(other) => return Err(anyhow!("label value must be a scalar, got `{other}`")),
+    };
+    Ok(json!({ "spec": spec }))
+}
+
+/// Parse a `docker run --device` spec `host_path[:container_path[:perms]]` into
+/// its parts. The container path defaults to the host path when omitted, and the
+/// cgroup permissions default to `rwm` (read/write/mknod). `perms` is validated
+/// to be a non-empty subset of `r`, `w`, `m` (each at most once). opts: `spec`
+/// (or `device`). Returns `{spec, host_path, container_path, permissions}`. Pure.
+fn op_parse_device(opts: Value) -> Result<Value> {
+    let spec = opts
+        .get("spec")
+        .or_else(|| opts.get("device"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing spec"))?;
+    let parts: Vec<&str> = spec.split(':').collect();
+    let (host, container, perms): (&str, &str, &str) = match parts.as_slice() {
+        [h] => (*h, *h, "rwm"),
+        [h, c] => (*h, *c, "rwm"),
+        [h, c, p] => (*h, *c, *p),
+        _ => {
+            return Err(anyhow!(
+                "invalid device spec `{spec}` (want host[:container[:perms]])"
+            ))
+        }
+    };
+    if host.is_empty() {
+        return Err(anyhow!("device host path must not be empty: `{spec}`"));
+    }
+    // cgroup device perms: a non-empty subset of r/w/m, each at most once.
+    let mut seen = [false; 3];
+    for b in perms.bytes() {
+        let i = match b {
+            b'r' => 0,
+            b'w' => 1,
+            b'm' => 2,
+            _ => return Err(anyhow!("device permissions must be r/w/m: `{perms}`")),
+        };
+        if seen[i] {
+            return Err(anyhow!(
+                "duplicate device permission `{}`: `{perms}`",
+                b as char
+            ));
+        }
+        seen[i] = true;
+    }
+    if perms.is_empty() {
+        return Err(anyhow!("device permissions must not be empty: `{spec}`"));
+    }
+    let container = if container.is_empty() {
+        host
+    } else {
+        container
+    };
+    Ok(json!({
+        "spec": spec,
+        "host_path": host,
+        "container_path": container,
+        "permissions": perms,
+    }))
+}
+
+/// Assemble a `--device` spec from parts — the inverse of `parse_device`. Emits
+/// the shortest form that round-trips: `host` alone when the container path
+/// equals the host path and permissions are the default `rwm`; otherwise
+/// `host:container[:perms]`. opts: `host_path` (required), optional
+/// `container_path` (defaults to the host path), `permissions` (defaults `rwm`).
+/// Returns `{spec}`. Pure.
+fn op_build_device(opts: Value) -> Result<Value> {
+    let host = opts
+        .get("host_path")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("missing host_path"))?;
+    let container = opts
+        .get("container_path")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(host);
+    let perms = opts
+        .get("permissions")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("rwm");
+    let spec = if container == host && perms == "rwm" {
+        host.to_string()
+    } else if perms == "rwm" {
+        format!("{host}:{container}")
+    } else {
+        format!("{host}:{container}:{perms}")
+    };
+    Ok(json!({ "spec": spec }))
+}
+
+/// Normalize a Unix signal name or number to its canonical `SIG`-prefixed form.
+/// Accepts a bare number (`9` → `SIGKILL`), a name with or without the `SIG`
+/// prefix (`KILL`, `sigkill`, `SIGTERM` all → the canonical upper-case form),
+/// and `RTMIN+n` / `RTMAX-n` realtime forms (passed through, upper-cased). The
+/// common signals 1-15 plus a handful of high-numbered ones map to a name; an
+/// unknown but valid-looking number stays a number under `SIG<n>`. opts:
+/// `signal` (or `spec`). Returns `{signal, name, number}` (`number` null when
+/// not resolvable from the name). Pure.
+fn op_parse_signal(opts: Value) -> Result<Value> {
+    let raw = opts
+        .get("signal")
+        .or_else(|| opts.get("spec"))
+        .and_then(|v| match v {
+            Value::String(s) => Some(s.clone()),
+            Value::Number(n) => Some(n.to_string()),
+            _ => None,
+        })
+        .ok_or_else(|| anyhow!("missing signal"))?;
+    let s = raw.trim();
+    if s.is_empty() {
+        return Err(anyhow!("signal must not be empty"));
+    }
+    // The canonical table covers the standard signals that have a stable number
+    // across Linux/macOS; realtime signals and platform-specific ones fall
+    // through to the name-only path.
+    const TABLE: &[(i64, &str)] = &[
+        (1, "HUP"),
+        (2, "INT"),
+        (3, "QUIT"),
+        (4, "ILL"),
+        (5, "TRAP"),
+        (6, "ABRT"),
+        (8, "FPE"),
+        (9, "KILL"),
+        (10, "USR1"),
+        (11, "SEGV"),
+        (12, "USR2"),
+        (13, "PIPE"),
+        (14, "ALRM"),
+        (15, "TERM"),
+        (17, "CHLD"),
+        (18, "CONT"),
+        (19, "STOP"),
+        (20, "TSTP"),
+    ];
+    // Numeric input: look up a name, else keep the number under SIG<n>.
+    if let Ok(n) = s.parse::<i64>() {
+        if n < 0 {
+            return Err(anyhow!("signal number must not be negative: `{raw}`"));
+        }
+        let name = TABLE.iter().find(|(num, _)| *num == n).map(|(_, nm)| *nm);
+        return Ok(match name {
+            Some(nm) => json!({"signal": format!("SIG{nm}"), "name": nm, "number": n}),
+            None => json!({"signal": format!("SIG{n}"), "name": Value::Null, "number": n}),
+        });
+    }
+    // Name input: strip an optional SIG prefix, upper-case, map back to a number.
+    let upper = s.to_ascii_uppercase();
+    let bare = upper.strip_prefix("SIG").unwrap_or(&upper);
+    if bare.is_empty() {
+        return Err(anyhow!("signal name must not be empty: `{raw}`"));
+    }
+    let number = TABLE
+        .iter()
+        .find(|(_, nm)| *nm == bare)
+        .map(|(num, _)| json!(num))
+        .unwrap_or(Value::Null);
+    Ok(json!({
+        "signal": format!("SIG{bare}"),
+        "name": bare,
+        "number": number,
+    }))
+}
+
 // ── exports ─────────────────────────────────────────────────────────────────
 
 #[no_mangle]
@@ -1795,6 +2127,36 @@ pub extern "C" fn docker__network_inspect(args: *const c_char) -> *const c_char 
 }
 
 #[no_mangle]
+pub extern "C" fn docker__search(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, op_search)
+}
+
+#[no_mangle]
+pub extern "C" fn docker__inspect_registry(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, op_inspect_registry)
+}
+
+#[no_mangle]
+pub extern "C" fn docker__network_connect(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, op_network_connect)
+}
+
+#[no_mangle]
+pub extern "C" fn docker__network_disconnect(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, op_network_disconnect)
+}
+
+#[no_mangle]
+pub extern "C" fn docker__exec_inspect(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, op_exec_inspect)
+}
+
+#[no_mangle]
+pub extern "C" fn docker__resize(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, op_resize)
+}
+
+#[no_mangle]
 pub extern "C" fn docker__parse_image_ref(args: *const c_char) -> *const c_char {
     ffi_call_async(args, |opts| async move { op_parse_image_ref(opts) })
 }
@@ -1897,6 +2259,31 @@ pub extern "C" fn docker__format_memory(args: *const c_char) -> *const c_char {
 #[no_mangle]
 pub extern "C" fn docker__build_restart_policy(args: *const c_char) -> *const c_char {
     ffi_call_async(args, |opts| async move { op_build_restart_policy(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__parse_label(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_parse_label(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__build_label(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_build_label(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__parse_device(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_parse_device(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__build_device(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_build_device(opts) })
+}
+
+#[no_mangle]
+pub extern "C" fn docker__parse_signal(args: *const c_char) -> *const c_char {
+    ffi_call_async(args, |opts| async move { op_parse_signal(opts) })
 }
 
 #[cfg(test)]
@@ -2284,6 +2671,51 @@ mod tests {
         assert!(
             v["error"].as_str().unwrap().contains("missing name"),
             "rename must require the new name; got {v}"
+        );
+    }
+
+    /// The batch of ops added in this surface expansion must surface their
+    /// missing-required-arg errors WITHOUT a live daemon — `get_client` is
+    /// called lazily after the arg check in each, so the error returned is the
+    /// arg error, not a connection error. Pins the contract per export.
+    #[test]
+    fn new_ops_reject_missing_required_args_offline() {
+        // The required field each export validates BEFORE touching the daemon.
+        for (f, want) in [
+            (
+                docker__search as extern "C" fn(*const c_char) -> *const c_char,
+                "missing term",
+            ),
+            (docker__inspect_registry, "missing image"),
+            (docker__network_connect, "missing network"),
+            (docker__network_disconnect, "missing network"),
+            (docker__exec_inspect, "missing id"),
+            (docker__resize, "missing container"),
+        ] {
+            let v = call_export(f, "{}");
+            assert_eq!(
+                v["error"], want,
+                "export must reject the missing arg offline; got {v}"
+            );
+        }
+        // network_connect/disconnect need the container once the network is given.
+        for f in [docker__network_connect, docker__network_disconnect] {
+            let v = call_export(f, r#"{"network":"appnet"}"#);
+            assert_eq!(
+                v["error"], "missing container",
+                "network attach/detach must require a container; got {v}"
+            );
+        }
+        // resize needs width and height once the container is present.
+        let v = call_export(docker__resize, r#"{"container":"web"}"#);
+        assert_eq!(
+            v["error"], "missing width",
+            "resize requires width; got {v}"
+        );
+        let v = call_export(docker__resize, r#"{"container":"web","width":80}"#);
+        assert_eq!(
+            v["error"], "missing height",
+            "resize requires height; got {v}"
         );
     }
 
@@ -3014,5 +3446,162 @@ mod tests {
         assert!(op_build_restart_policy(json!({"policy": "always", "max_retries": 3})).is_err());
         assert!(op_build_restart_policy(json!({"policy": "nope"})).is_err());
         assert!(op_build_restart_policy(json!({})).is_err());
+    }
+
+    #[test]
+    fn parse_label_splits_on_first_equals_with_bare_key() {
+        // KEY=VALUE → value set, bare-key null distinguished from "".
+        let r = op_parse_label(json!({"spec": "com.example.app=web"})).unwrap();
+        assert_eq!(r["key"], json!("com.example.app"));
+        assert_eq!(r["value"], json!("web"));
+        // A value may contain `=`: only the first one splits.
+        assert_eq!(
+            op_parse_label(json!({"spec": "url=a=b=c"})).unwrap()["value"],
+            json!("a=b=c")
+        );
+        // Trailing `=` is an empty value, NOT a bare key.
+        let e = op_parse_label(json!({"spec": "empty="})).unwrap();
+        assert_eq!(e["value"], json!(""));
+        // Bare KEY → null value (the `--label KEY` empty-valued form).
+        let h = op_parse_label(json!({"spec": "needs-value"})).unwrap();
+        assert_eq!(h["key"], json!("needs-value"));
+        assert_eq!(h["value"], Value::Null);
+        // Empty key / empty spec / missing arg error.
+        assert!(op_parse_label(json!({"spec": "=v"})).is_err());
+        assert!(op_parse_label(json!({"spec": ""})).is_err());
+        assert!(op_parse_label(json!({})).is_err());
+    }
+
+    #[test]
+    fn build_label_inverts_parse_label() {
+        assert_eq!(
+            op_build_label(json!({"key": "app", "value": "web"})).unwrap()["spec"],
+            json!("app=web")
+        );
+        // Empty-string value → trailing `=`; no value → bare key.
+        assert_eq!(
+            op_build_label(json!({"key": "empty", "value": ""})).unwrap()["spec"],
+            json!("empty=")
+        );
+        assert_eq!(
+            op_build_label(json!({"key": "bare"})).unwrap()["spec"],
+            json!("bare")
+        );
+        // Numeric value stringified.
+        assert_eq!(
+            op_build_label(json!({"key": "n", "value": 3})).unwrap()["spec"],
+            json!("n=3")
+        );
+        // Round-trips parse_label for every form.
+        for spec in ["app=web", "url=a=b=c", "empty=", "bare"] {
+            let p = op_parse_label(json!({ "spec": spec })).unwrap();
+            let rebuilt = op_build_label(json!({"key": p["key"], "value": p["value"]})).unwrap()
+                ["spec"]
+                .clone();
+            assert_eq!(rebuilt, json!(spec), "round-trip for {spec}");
+        }
+        assert!(op_build_label(json!({"value": "x"})).is_err());
+        assert!(op_build_label(json!({"key": ""})).is_err());
+    }
+
+    #[test]
+    fn parse_device_handles_host_container_perms_forms() {
+        // host only → container defaults to host, perms default rwm.
+        let h = op_parse_device(json!({"spec": "/dev/snd"})).unwrap();
+        assert_eq!(h["host_path"], json!("/dev/snd"));
+        assert_eq!(h["container_path"], json!("/dev/snd"));
+        assert_eq!(h["permissions"], json!("rwm"));
+        // host:container → explicit container path, default perms.
+        let hc = op_parse_device(json!({"spec": "/dev/sda:/dev/xvda"})).unwrap();
+        assert_eq!(hc["container_path"], json!("/dev/xvda"));
+        assert_eq!(hc["permissions"], json!("rwm"));
+        // host:container:perms — a perm subset.
+        let full = op_parse_device(json!({"spec": "/dev/sda:/dev/xvda:rw"})).unwrap();
+        assert_eq!(full["permissions"], json!("rw"));
+        // `device` alias.
+        assert_eq!(
+            op_parse_device(json!({"device": "/dev/null"})).unwrap()["host_path"],
+            json!("/dev/null")
+        );
+        // Errors: bad perm char, duplicate perm, too many segments, empty host.
+        assert!(op_parse_device(json!({"spec": "/dev/sda:/dev/xvda:rx"})).is_err());
+        assert!(op_parse_device(json!({"spec": "/dev/sda:/dev/xvda:rr"})).is_err());
+        assert!(op_parse_device(json!({"spec": "a:b:c:d"})).is_err());
+        assert!(op_parse_device(json!({"spec": ":/dev/xvda"})).is_err());
+        assert!(op_parse_device(json!({})).is_err());
+    }
+
+    #[test]
+    fn build_device_inverts_parse_device() {
+        // Shortest form when container == host and perms are default.
+        assert_eq!(
+            op_build_device(json!({"host_path": "/dev/snd"})).unwrap()["spec"],
+            json!("/dev/snd")
+        );
+        // host:container when only the container differs.
+        assert_eq!(
+            op_build_device(json!({"host_path": "/dev/sda", "container_path": "/dev/xvda"}))
+                .unwrap()["spec"],
+            json!("/dev/sda:/dev/xvda")
+        );
+        // Full form when perms are non-default.
+        assert_eq!(
+            op_build_device(
+                json!({"host_path": "/dev/sda", "container_path": "/dev/xvda", "permissions": "rw"})
+            )
+            .unwrap()["spec"],
+            json!("/dev/sda:/dev/xvda:rw")
+        );
+        // Round-trips parse_device for every canonical form.
+        for spec in ["/dev/snd", "/dev/sda:/dev/xvda", "/dev/sda:/dev/xvda:rw"] {
+            let p = op_parse_device(json!({ "spec": spec })).unwrap();
+            let rebuilt = op_build_device(json!({
+                "host_path": p["host_path"],
+                "container_path": p["container_path"],
+                "permissions": p["permissions"],
+            }))
+            .unwrap()["spec"]
+                .clone();
+            assert_eq!(rebuilt, json!(spec), "round-trip for {spec}");
+        }
+        assert!(op_build_device(json!({})).is_err());
+    }
+
+    #[test]
+    fn parse_signal_normalizes_names_and_numbers() {
+        // A bare number maps to a name and the canonical SIG form.
+        let n = op_parse_signal(json!({"signal": 9})).unwrap();
+        assert_eq!(n["signal"], json!("SIGKILL"));
+        assert_eq!(n["name"], json!("KILL"));
+        assert_eq!(n["number"], json!(9));
+        // A number as a string works too.
+        assert_eq!(
+            op_parse_signal(json!({"signal": "15"})).unwrap()["signal"],
+            json!("SIGTERM")
+        );
+        // Names with and without the SIG prefix, any case → canonical upper.
+        for s in ["KILL", "sigkill", "SIGKILL", "Kill"] {
+            let v = op_parse_signal(json!({ "signal": s })).unwrap();
+            assert_eq!(v["signal"], json!("SIGKILL"), "`{s}` → SIGKILL");
+            assert_eq!(v["number"], json!(9), "`{s}` resolves the number");
+        }
+        // A name not in the table keeps SIG<name> with a null number.
+        let rt = op_parse_signal(json!({"signal": "RTMIN+3"})).unwrap();
+        assert_eq!(rt["signal"], json!("SIGRTMIN+3"));
+        assert_eq!(rt["number"], Value::Null);
+        // An unknown number stays a number under SIG<n>.
+        let hi = op_parse_signal(json!({"signal": 64})).unwrap();
+        assert_eq!(hi["signal"], json!("SIG64"));
+        assert_eq!(hi["name"], Value::Null);
+        assert_eq!(hi["number"], json!(64));
+        // `spec` alias; errors on empty / negative / missing.
+        assert_eq!(
+            op_parse_signal(json!({"spec": "TERM"})).unwrap()["signal"],
+            json!("SIGTERM")
+        );
+        assert!(op_parse_signal(json!({"signal": ""})).is_err());
+        assert!(op_parse_signal(json!({"signal": -1})).is_err());
+        assert!(op_parse_signal(json!({"signal": "SIG"})).is_err());
+        assert!(op_parse_signal(json!({})).is_err());
     }
 }

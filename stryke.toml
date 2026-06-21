@@ -51,6 +51,12 @@ exports = [
     "docker__image_inspect",
     "docker__volume_inspect",
     "docker__network_inspect",
+    "docker__search",
+    "docker__inspect_registry",
+    "docker__network_connect",
+    "docker__network_disconnect",
+    "docker__exec_inspect",
+    "docker__resize",
     "docker__parse_image_ref",
     "docker__normalize_image_ref",
     "docker__build_image_ref",
@@ -72,6 +78,11 @@ exports = [
     "docker__build_platform",
     "docker__parse_memory",
     "docker__format_memory",
+    "docker__parse_label",
+    "docker__build_label",
+    "docker__parse_device",
+    "docker__build_device",
+    "docker__parse_signal",
 ]
 
 [scripts]

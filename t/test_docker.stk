@@ -265,4 +265,49 @@ assert_eq Docker::build_platform(+{ os => $pp->{os}, architecture => $pp->{archi
 assert_dies fn { Docker::build_platform(+{ architecture => "amd64" }) },                            "build_platform: rejects a missing os"
 assert_dies fn { Docker::build_platform(+{ os => "linux", architecture => "amd64", variant => "" }) }, "build_platform: rejects an empty variant"
 
+# parse_label: --label KEY=VALUE; first = splits; bare key → undef value.
+val $lbl = Docker::parse_label("com.example.app=web")
+assert_eq $lbl->{key},   "com.example.app", "parse_label: key before the ="
+assert_eq $lbl->{value}, "web",             "parse_label: value after the ="
+assert_eq Docker::parse_label("url=a=b=c")->{value}, "a=b=c", "parse_label: only the first = splits"
+assert_eq Docker::parse_label("empty=")->{value}, "", "parse_label: trailing = is an empty value"
+assert_ok !defined(Docker::parse_label("bare")->{value}), "parse_label: bare key has undef value"
+assert_dies fn { Docker::parse_label("=v") }, "parse_label: empty key errors"
+
+# build_label: inverse of parse_label.
+assert_eq Docker::build_label("app", "web"), "app=web", "build_label: KEY=VALUE"
+assert_eq Docker::build_label("empty", ""),  "empty=",   "build_label: empty value gives trailing ="
+assert_eq Docker::build_label("bare"),       "bare",     "build_label: no value is a bare key"
+for val $spec (qw(app=web url=a=b=c empty= bare)) {
+    val $p = Docker::parse_label($spec)
+    assert_eq Docker::build_label($p->{key}, $p->{value}), $spec, "build_label: round-trips $spec"
+}
+
+# parse_device: --device host[:container[:perms]].
+val $dev = Docker::parse_device("/dev/sda:/dev/xvda:rw")
+assert_eq $dev->{host_path},      "/dev/sda",  "parse_device: host path"
+assert_eq $dev->{container_path}, "/dev/xvda", "parse_device: container path"
+assert_eq $dev->{permissions},    "rw",        "parse_device: permissions"
+assert_eq Docker::parse_device("/dev/snd")->{container_path}, "/dev/snd", "parse_device: container defaults to host"
+assert_eq Docker::parse_device("/dev/snd")->{permissions}, "rwm", "parse_device: perms default to rwm"
+assert_dies fn { Docker::parse_device("/dev/sda:/dev/xvda:rx") }, "parse_device: rejects a bad perm char"
+
+# build_device: inverse of parse_device (shortest round-tripping form).
+assert_eq Docker::build_device(host_path => "/dev/snd"), "/dev/snd", "build_device: host only"
+assert_eq Docker::build_device(host_path => "/dev/sda", container_path => "/dev/xvda"), "/dev/sda:/dev/xvda", "build_device: host:container"
+assert_eq Docker::build_device(host_path => "/dev/sda", container_path => "/dev/xvda", permissions => "rw"), "/dev/sda:/dev/xvda:rw", "build_device: full form"
+for val $spec (qw(/dev/snd)) {
+    val $p = Docker::parse_device($spec)
+    assert_eq Docker::build_device(host_path => $p->{host_path}, container_path => $p->{container_path}, permissions => $p->{permissions}), $spec, "build_device: round-trips $spec"
+}
+
+# parse_signal: normalize a name or number to the canonical SIG form.
+assert_eq Docker::parse_signal(9)->{signal}, "SIGKILL", "parse_signal: number → SIGKILL"
+assert_eq Docker::parse_signal(9)->{number}, 9,         "parse_signal: number preserved"
+assert_eq Docker::parse_signal("KILL")->{signal}, "SIGKILL", "parse_signal: bare name → SIGKILL"
+assert_eq Docker::parse_signal("sigterm")->{signal}, "SIGTERM", "parse_signal: lowercase prefixed name"
+assert_eq Docker::parse_signal("KILL")->{number}, 9,    "parse_signal: name resolves the number"
+assert_ok !defined(Docker::parse_signal(64)->{name}),  "parse_signal: unknown number has no name"
+assert_dies fn { Docker::parse_signal("") }, "parse_signal: empty signal dies"
+
 test_run

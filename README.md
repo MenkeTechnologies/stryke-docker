@@ -161,6 +161,8 @@ network, workdir, user, hostname, restart, rm, tty`
 Docker::logs         $container, %opts → $text
 Docker::logs_follow  $container, %opts → dies      # streaming — deferred in v0.2.x cdylib
 Docker::exec         $container, \@cmd, %opts → $output   # captured stdout+stderr
+Docker::exec_inspect $id, %opts → \%info               # exec exit code / running / pid
+Docker::resize       $container, $width, $height, %opts → 1 | 0   # resize the container TTY
 Docker::stats        $container, %opts → \%snapshot   # one-shot stats (--no-stream)
 Docker::diff         $container, %opts → @{ {Path, Kind} }   # fs changes vs image (0 mod,1 add,2 del)
 Docker::history      $image, %opts → @layers           # image build history
@@ -196,6 +198,11 @@ Docker::parse_memory($memory) → { memory, value, unit, bytes }   # --memory/--
 Docker::format_memory($bytes) → { bytes, value, unit, memory }   # inverse: largest exact binary unit (536870912 → 512m); round-trips parse_memory
 Docker::parse_platform($platform) → { platform, os, architecture, variant }   # --platform os/arch[/variant] (linux/arm64/v8); variant optional
 Docker::build_platform(\%parts) → { platform, os, architecture, variant }     # { os, architecture, variant? } → --platform string; inverse of parse_platform
+Docker::parse_label($spec)   → { spec, key, value }   # --label KEY=VAL; split on first =; bare KEY → undef value
+Docker::build_label($key, $value?) → $spec    # KEY=VALUE, or bare KEY when value omitted; inverse of parse_label
+Docker::parse_device($spec)  → { spec, host_path, container_path, permissions }   # --device host[:container[:perms]]; container defaults to host, perms default rwm
+Docker::build_device(%opts)  → $spec          # { host_path, container_path?, permissions? } → shortest --device spec; inverse of parse_device
+Docker::parse_signal($signal) → { signal, name, number }   # normalize a signal name/number to SIG-form (9 / KILL / sigkill → SIGKILL)
 ```
 
 `parse_mount` classifies a `-v` short mount: a host-path source (`/`, `.`, `~`)
@@ -206,20 +213,24 @@ and an `ro` entry sets `readonly`.
 ### Images
 
 ```stryke
-Docker::images   %opts → @{ \%image }
-Docker::pull     $image, %opts → @events                # drained event list
-Docker::push     $image, %opts → dies                   # deferred in v0.2.x cdylib
-Docker::rmi      $image, %opts → 1 | 0                  # opts: force
-Docker::tag      $source, $target, %opts → 1 | 0
-Docker::build    $dir,  %opts → dies                    # deferred in v0.2.x cdylib
+Docker::images          %opts → @{ \%image }
+Docker::pull            $image, %opts → @events                # drained event list
+Docker::push            $image, %opts → dies                   # deferred in v0.2.x cdylib
+Docker::rmi             $image, %opts → 1 | 0                  # opts: force
+Docker::tag             $source, $target, %opts → 1 | 0
+Docker::build           $dir,  %opts → dies                    # deferred in v0.2.x cdylib
+Docker::search          $term, %opts → @{ \%result }           # Docker Hub search; opts: limit
+Docker::inspect_registry $image, %opts → \%distribution        # registry metadata, no pull
 ```
 
 ### Networks + volumes
 
 ```stryke
-Docker::networks         %opts → @{ \%network }
-Docker::network_create   $name, %opts → \%network     # driver, subnet, gateway, label
-Docker::network_rm       $name, %opts → { removed }
+Docker::networks            %opts → @{ \%network }
+Docker::network_create      $name, %opts → \%network     # driver, subnet, gateway, label
+Docker::network_rm          $name, %opts → 1 | 0
+Docker::network_connect     $network, $container, %opts → 1 | 0   # opts: aliases \@names
+Docker::network_disconnect  $network, $container, %opts → 1 | 0   # opts: force
 
 Docker::volumes          %opts → @{ \%volume }
 Docker::volume_create    $name, %opts → \%volume      # driver, label
@@ -239,13 +250,14 @@ Each `Docker::*` wrapper builds a JSON args dict and calls a sibling
 `docker__*` symbol resolved out of `libstryke_docker.{dylib,so}`. The
 cdylib is dlopened in-process on first `use Docker` (via stryke's
 `pkg::commands::try_load_ffi_for` resolver hook). Its exports cover
-containers, images, networks, volumes, exec, logs, and prune, plus
-daemon-free helpers (`docker__parse_image_ref`, `docker__build_image_ref`,
-`docker__normalize_image_ref`,
+containers (including network attach/detach, TTY resize, exec inspect),
+images (including search and registry inspect), networks, volumes, exec,
+logs, and prune, plus daemon-free helpers (`docker__parse_image_ref`,
+`docker__build_image_ref`, `docker__normalize_image_ref`,
 `docker__valid_container_name`, `docker__parse_port_spec`,
-`docker__build_port_spec`,
-`docker__parse_mount`). The
-authoritative list is `[ffi].exports` in `stryke.toml`.
+`docker__build_port_spec`, `docker__parse_mount`, `docker__parse_label`,
+`docker__parse_device`, `docker__parse_signal`). The authoritative list is
+`[ffi].exports` in `stryke.toml`.
 
 **Persistent state:**
 
