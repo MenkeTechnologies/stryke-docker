@@ -78,7 +78,7 @@ exit 1 unless Docker::ping()
 # Pull, run, inspect, stop, rm.
 Docker::pull "nginx:alpine"
 
-my $r = Docker::run "nginx:alpine",
+val $r = Docker::run "nginx:alpine",
     name   => "web",
     port   => ["8080:80/tcp"],
     label  => ["app=web"],
@@ -86,8 +86,8 @@ my $r = Docker::run "nginx:alpine",
 p "started: $r->{id}"
 
 # List with filters.
-my @web = Docker::ps all => 1, filters => { label => ["app=web"] }
-for my $c (@web) {
+val @web = Docker::ps all => 1, filters => { label => ["app=web"] }
+for val $c (@web) {
     p "  $c->{Id}  $c->{State}  " . join(",", @{$c->{Names}})
 }
 
@@ -109,14 +109,14 @@ Docker::network_rm "appnet"
 Docker::volume_rm  "appdata"
 
 # Reclaim space.
-my $report = Docker::prune all => 1
+val $report = Docker::prune all => 1
 p "freed: $report->{containers}{SpaceReclaimed} bytes"
 ```
 
 Per-call connection overrides:
 
 ```stryke
-my %remote = (host => "tcp://docker.example.com:2376", timeout => 30)
+val %remote = (host => "tcp://docker.example.com:2376", timeout => 30)
 Docker::ps %remote
 ```
 
