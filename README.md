@@ -88,7 +88,7 @@ p "started: $r->{id}"
 # List with filters.
 val @web = Docker::ps all => 1, filters => { label => ["app=web"] }
 for val $c (@web) {
-    p "  $c->{Id}  $c->{State}  " . join(",", @{$c->{Names}})
+    p "  #{$c->{Id}}  #{$c->{State}}  #{join(',', @{$c->{Names}})}"
 }
 
 # Buffered logs.
@@ -100,7 +100,7 @@ p Docker::exec "web", ["sh", "-c", "nginx -v"]
 # Networks + volumes.
 Docker::network_create "appnet", driver => "bridge", subnet => "10.42.0.0/24"
 Docker::volume_create  "appdata"
-p $_->{Name} for Docker::volumes()
+p _->{Name} for Docker::volumes()
 
 # Cleanup.
 Docker::stop "web", time => 5
