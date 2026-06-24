@@ -23,6 +23,8 @@ package tier.
 
 ### [`strykelang`](https://github.com/MenkeTechnologies/strykelang) &middot; [`MenkeTechnologiesMeta`](https://github.com/MenkeTechnologies/MenkeTechnologiesMeta) · [`stryke-k8s`](https://github.com/MenkeTechnologies/stryke-k8s) · [`stryke-kafka`](https://github.com/MenkeTechnologies/stryke-kafka) · [`stryke-demo`](https://github.com/MenkeTechnologies/stryke-demo)
 
+### [`Read the Docs`](https://menketechnologies.github.io/stryke-docker/) &middot; [`Engineering Report`](https://menketechnologies.github.io/stryke-docker/report.html)
+
 ---
 
 ## Table of Contents
