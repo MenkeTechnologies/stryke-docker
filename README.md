@@ -130,6 +130,7 @@ Docker::ps %remote
 Docker::ping     %opts → 1 | ""
 Docker::version  %opts → \%info             # Version, ApiVersion, Os, Arch, …
 Docker::info     %opts → \%info
+Docker::pkg_version() → $version_string     # the cdylib's CARGO_PKG_VERSION
 Docker::events   %opts → dies               # streaming — deferred in v0.2.x cdylib
 ```
 
