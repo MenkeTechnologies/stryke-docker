@@ -80,45 +80,41 @@ exit 1 unless Docker::ping()
 # Pull, run, inspect, stop, rm.
 Docker::pull "nginx:alpine"
 
-val $r = Docker::run "nginx:alpine",
-    name   => "web",
-    port   => ["8080:80/tcp"],
-    label  => ["app=web"],
-    detach => 1
-p "started: $r->{id}"
+val $r = Docker::run "nginx:alpine", name => "web"
+p "started: $r->{Id}"
 
-# List with filters.
-val @web = Docker::ps all => 1, filters => { label => ["app=web"] }
-for val $c (@web) {
+# List containers (running only unless all => 1).
+val @all = Docker::ps all => 1
+for val $c (@all) {
     p "  #{$c->{Id}}  #{$c->{State}}  #{join(',', @{$c->{Names}})}"
 }
 
 # Buffered logs.
-p Docker::logs "web", tail => "50", timestamps => 1
+p Docker::logs "web", tail => "50"
 
 # Exec — returns captured stdout+stderr.
 p Docker::exec "web", ["sh", "-c", "nginx -v"]
 
 # Networks + volumes.
-Docker::network_create "appnet", driver => "bridge", subnet => "10.42.0.0/24"
+Docker::network_create "appnet", driver => "bridge"
 Docker::volume_create  "appdata"
-p _->{Name} for Docker::volumes()
+p Docker::volumes()
 
 # Cleanup.
-Docker::stop "web", time => 5
+Docker::stop "web", timeout => 5
 Docker::rm   "web"
 Docker::network_rm "appnet"
 Docker::volume_rm  "appdata"
 
 # Reclaim space.
-val $report = Docker::prune all => 1
-p "freed: $report->{containers}{SpaceReclaimed} bytes"
+val $report = Docker::prune kind => "images"
+p $report
 ```
 
-Per-call connection overrides:
+Per-call connection override (`host`):
 
 ```stryke
-val %remote = (host => "tcp://docker.example.com:2376", timeout => 30)
+val %remote = (host => "tcp://docker.example.com:2376")
 Docker::ps %remote
 ```
 
@@ -131,7 +127,7 @@ Docker::ping     %opts → 1 | ""
 Docker::version  %opts → \%info             # Version, ApiVersion, Os, Arch, …
 Docker::info     %opts → \%info
 Docker::pkg_version() → $version_string     # the cdylib's CARGO_PKG_VERSION
-Docker::events   %opts → dies               # streaming — deferred in v0.2.x cdylib
+Docker::events   %opts → dies               # streaming — deferred in the cdylib
 ```
 
 ### Containers
@@ -139,13 +135,13 @@ Docker::events   %opts → dies               # streaming — deferred in v0.2.x
 ```stryke
 Docker::ps        %opts → @{ \%container }
 Docker::inspect   $container, %opts → \%info
-Docker::run       $image, %opts → { id, warnings, started }
-Docker::create    $image, %opts → { id, warnings, started => false }
-Docker::start     $container, %opts → { id, started }
-Docker::stop      $container, %opts → { id, stopped }    # opts: time
-Docker::restart   $container, %opts → { id, restarted }
-Docker::kill      $container, %opts → { id, killed }     # opts: signal
-Docker::rm        $container, %opts → { id, removed }    # opts: force, volumes
+Docker::run       $image, %opts → \%created             # create + start; {Id, Warnings}
+Docker::create    $image, %opts → \%created             # {Id, Warnings}; opt start => 1 also starts it
+Docker::start     $container, %opts → 1 | 0
+Docker::stop      $container, %opts → 1 | 0          # opts: timeout
+Docker::restart   $container, %opts → 1 | 0
+Docker::kill      $container, %opts → 1 | 0          # opts: signal (default SIGKILL)
+Docker::rm        $container, %opts → 1 | 0          # opts: force, volumes
 Docker::pause     $container, %opts → 1 | 0
 Docker::unpause   $container, %opts → 1 | 0
 Docker::rename    $container, $name, %opts → 1 | 0
@@ -154,15 +150,15 @@ Docker::top       $container, %opts → { Titles, Processes }   # opts: ps_args
 Docker::commit    $container, %opts → $image_id          # opts: repo, tag, comment, author, pause
 ```
 
-`%opts` for run/create:
-`name, cmd \@argv, env \@KV, port \@spec, volume \@spec, label \@KV,
-network, workdir, user, hostname, restart, rm, tty`
+`%opts` for run/create: `name`, `cmd \@argv`, `env \@KEY=VALUE`. Port, volume,
+label, network and other `docker run` settings are not forwarded to the daemon;
+the `parse_*` / `build_*` helpers below only convert spec strings.
 
 ### Logs + exec + stats
 
 ```stryke
 Docker::logs         $container, %opts → $text
-Docker::logs_follow  $container, %opts → dies      # streaming — deferred in v0.2.x cdylib
+Docker::logs_follow  $container, %opts → dies      # streaming — deferred in the cdylib
 Docker::exec         $container, \@cmd, %opts → $output   # captured stdout+stderr
 Docker::exec_inspect $id, %opts → \%info               # exec exit code / running / pid
 Docker::resize       $container, $width, $height, %opts → 1 | 0   # resize the container TTY
@@ -223,11 +219,11 @@ and an `ro` entry sets `readonly`.
 
 ```stryke
 Docker::images          %opts → @{ \%image }
-Docker::pull            $image, %opts → @events                # drained event list
-Docker::push            $image, %opts → dies                   # deferred in v0.2.x cdylib
+Docker::pull            $image, %opts → { image }             # pull progress is drained, not returned
+Docker::push            $image, %opts → dies                   # deferred in the cdylib
 Docker::rmi             $image, %opts → 1 | 0                  # opts: force
 Docker::tag             $source, $target, %opts → 1 | 0
-Docker::build           $dir,  %opts → dies                    # deferred in v0.2.x cdylib
+Docker::build           $dir,  %opts → dies                   # deferred in the cdylib
 Docker::search          $term, %opts → @{ \%result }           # Docker Hub search; opts: limit
 Docker::inspect_registry $image, %opts → \%distribution        # registry metadata, no pull
 ```
@@ -236,21 +232,21 @@ Docker::inspect_registry $image, %opts → \%distribution        # registry meta
 
 ```stryke
 Docker::networks            %opts → @{ \%network }
-Docker::network_create      $name, %opts → \%network     # driver, subnet, gateway, label
+Docker::network_create      $name, %opts → \%response    # opts: driver (default bridge)
 Docker::network_rm          $name, %opts → 1 | 0
 Docker::network_connect     $network, $container, %opts → 1 | 0   # opts: aliases \@names
 Docker::network_disconnect  $network, $container, %opts → 1 | 0   # opts: force
 
-Docker::volumes          %opts → @{ \%volume }
-Docker::volume_create    $name, %opts → \%volume      # driver, label
-Docker::volume_rm        $name, %opts → { removed }   # force
+Docker::volumes          %opts → \%response       # daemon volume-list document
+Docker::volume_create    $name, %opts → \%volume
+Docker::volume_rm        $name, %opts → 1 | 0         # opts: force
 ```
 
 ### Prune
 
 ```stryke
 Docker::prune  %opts → \%report
-    # opts: containers, images, volumes, networks, all
+    # opts: kind => containers (default) | images | volumes | networks
 ```
 
 ## [0x03] FFI layer
@@ -261,12 +257,8 @@ cdylib is dlopened in-process on first `use Docker` (via stryke's
 `pkg::commands::try_load_ffi_for` resolver hook). Its exports cover
 containers (including network attach/detach, TTY resize, exec inspect),
 images (including search and registry inspect), networks, volumes, exec,
-logs, and prune, plus daemon-free helpers (`docker__parse_image_ref`,
-`docker__build_image_ref`, `docker__normalize_image_ref`,
-`docker__valid_container_name`, `docker__parse_port_spec`,
-`docker__build_port_spec`, `docker__parse_mount`, `docker__parse_label`,
-`docker__parse_device`, `docker__parse_signal`). The authoritative list is
-`[ffi].exports` in `stryke.toml`.
+logs, and prune, plus daemon-free parse/build/validate helpers. The authoritative
+list is `[ffi].exports` in `stryke.toml`.
 
 **Persistent state:**
 
@@ -343,10 +335,10 @@ stryke-docker/
 
 ## [0x07] Roadmap
 
-| Shipped (v0.2.x) | Later |
+| Shipped | Later |
 |---|---|
 | Local socket + DOCKER_HOST tcp/http | TLS client certs (DOCKER_CERT_PATH / DOCKER_TLS_VERIFY) |
-| Pull (drained event list) | Build / push / events / logs --follow (need callback FFI / tar / auth) |
+| Pull (progress drained) | Build / push / events / logs --follow (need callback FFI / tar / auth) |
 | Pause/unpause/rename/wait/top/commit + one-shot stats | Interactive TTY + stdin attach |
 | Exec with captured stdout+stderr | docker-compose v2 file parser |
 | Synchronous create/start/stop | Swarm services / configs / secrets |
